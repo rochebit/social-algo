@@ -239,3 +239,31 @@ These scenarios verify client-side CSS layouts, state transitions, PWA metadata,
 * 7.6.2. **Assertions:**
   - 7.6.2.1. `/manifest.json` returns HTTP 200 with standard JSON manifest content.
   - 7.6.2.2. Page index contains `<meta name="apple-mobile-web-app-capable" content="yes">`.
+
+### 7.7 Skip Button Viewport Actions
+* 7.7.1. **Mobile Skip Verification:** Click the "Skip" button in the bottom action bar on mobile.
+  - 7.7.1.1. **Assertion:** The view transitions to card `1` by incrementing `activePostIndex = 1`.
+  - 7.7.1.2. **Assertion:** Assert that no update request is sent to Firestore and the `feedback` field for card `0` remains `null`.
+* 7.7.2. **Desktop Skip Verification:** Click the "Skip" button on a card in desktop view.
+  - 7.7.2.1. **Assertion:** The card is removed from the DOM.
+  - 7.7.2.2. **Assertion:** Assert that no update request is sent to Firestore and the `feedback` field remains `null`.
+
+### 7.8 PWA Logo Click Hard Reload
+* 7.8.1. **Test Action:** Click the application logo element in the top-left of the page header.
+* 7.8.2. **Assertions:**
+  - 7.8.2.1. The Service Worker registration update check (`registration.update()`) is invoked.
+  - 7.8.2.2. A cache-busting page refresh is triggered.
+
+---
+
+## 8. Implementing Agent Verification & Testing Guidelines
+
+These rules apply strictly to any AI agent or developer implementing modifications to the frontend code.
+
+### 8.1 Visual Rendering Inspection
+* 8.1.1. **Visual Testing Requirement:** When updating the frontend codebase, the implementing agent must run the application locally, open the UI (either using a headless browser subagent, screenshot verification tool, or manual browser window), and inspect the visual rendering of the interface.
+* 8.1.2. **Proactive Improvement Constraint:** The agent must actively search for rendering issues (e.g., misaligned icons, broken layouts, overlapping text, incorrect line-heights, or text truncation) and immediately write fixes to ensure a polished, high-fidelity presentation.
+
+### 8.2 Testing & Authentication Bypass
+* 8.2.1. **Test Sign-In Bypass:** The agent must design or leverage a mock sign-in or guest bypass mechanism in the local/emulator environment to access the dashboard views without requiring the actual owner's private Google credentials.
+* 8.2.2. **No Faked Feedback Action:** The implementing agent is **strictly prohibited** from writing ratings or submitting post feedback (Thumbs Up/Down) to Firestore on behalf of the owner. All automated/manual verification clicks on feedback buttons must target mock local databases or local emulators only.

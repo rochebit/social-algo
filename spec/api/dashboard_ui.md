@@ -70,6 +70,12 @@ To prevent posts from shifting or moving while reading, the feed does **not** bi
   - 3.3.3.1. Decrement the counter UI immediately when the user rates a post.
   - 3.3.3.2. Increment the counter UI immediately when the ingestion daemon syncs a new post match.
 
+### 3.4 PWA Update & Logo Refresh Action
+* 3.4.1. **Logo Placement:** Render the application logo in the top-left corner of the header.
+* 3.4.2. **Click Trigger & Cache Busting:** When the user clicks the logo, the application must:
+  - 3.4.2.1. Call the Service Worker registration update method: `registration.update()` to check for a new service worker / newer site version.
+  - 3.4.2.2. Trigger a hard reload of the page (`window.location.reload(true)` or equivalent cache-busting reload) to fetch and apply the updated assets immediately without needing to reinstall the PWA.
+
 ---
 
 ## 4. Layout & Viewport Variations (Mobile vs. Desktop)
@@ -83,36 +89,38 @@ The dashboard presents different layouts depending on the user's screen width.
 * 4.1.4. **Fixed Bottom Action Bar:** Render a sticky action bar container:
   - 4.1.4.1. **CSS:** `position: fixed; bottom: 0; left: 0; right: 0; height: 72px; z-index: 1000; background-color: #1e293b; border-top: 1px solid #334155; display: flex; justify-content: space-around; align-items: center;`
   - 4.1.4.2. **Stability:** Keep buttons completely stationary in the viewport regardless of the active card's content length.
-* 4.1.5. **Transition Action:** When a feedback button is clicked:
-  - 4.1.5.1. Trigger Firestore document update.
-  - 4.1.5.2. Increment `activePostIndex = activePostIndex + 1`.
-  - 4.1.5.3. Trigger a CSS card-swipe slide transition.
+  - 4.1.4.3. **Skip Button Placement:** Include a dedicated "Skip" button in this bottom action bar, visually styled to distinguish it from the feedback buttons.
+* 4.1.5. **Transition Action:** When a feedback button or the Skip button is clicked:
+  - 4.1.5.1. **Feedback Click Action:** If a feedback rating is clicked, trigger the Firestore document update to set the rating.
+  - 4.1.5.2. **Skip Click Action:** If the Skip button is clicked, do **not** write any feedback to Firestore (leaving the field `null` to allow later review).
+  - 4.1.5.3. **Navigation:** Increment `activePostIndex = activePostIndex + 1`.
+  - 4.1.5.4. **Transition:** Trigger a CSS card-swipe slide transition.
 
 ### 4.2 Desktop Multi-Post View (`@media (min-width: 640px)`)
 * 4.2.1. **Feed Timeline:** Render as a standard vertical feed showing multiple posts in a single scrollable viewport.
 * 4.2.2. **Sizing:** Set a maximum width of `640px` and center the feed column on screen.
-* 4.2.3. **Action Bar Integration:** Embed an individual feedback button action bar directly inside each card.
+* 4.2.3. **Action Bar Integration:** Embed an individual feedback button action bar and a dedicated "Skip" button directly inside each card footer.
+* 4.2.4. **Skip Action:** Clicking the "Skip" button on a card in desktop view hides/dismisses that post card from the current viewport session (e.g. by adding the post ID to a list of skipped IDs in local component state) without writing any feedback to Firestore.
 
 ---
 
-## 5. Extended Feedback Action Buttons
+## 5. Extended Feedback & Skip Action Buttons
 
-The UI displays four feedback options:
+The UI displays four feedback options and one navigation skip option:
 
 ```text
-+---------------------------------------------+
-|  [ -- ]     [ - ]     [ + ]     [ ++ ]      |
-|  Negative  Neutral  Positive  Extra Pos.    |
-|  Negative  Neutral  Positive  Extra Pos.    |
-+---------------------------------------------+
++--------------------------------------------------------+
+|  [ -- ]     [ - ]     [ + ]     [ ++ ]      [ Skip ]   |
+|  Negative  Neutral  Positive  Extra Pos.     Skip      |
++--------------------------------------------------------+
 ```
 
-### 5.1 Button Mappings & Firestore Values
-Clicking a button sets the corresponding string in the post's `feedback` field in Firestore:
-* 5.1.1. **`--` / Double Minus Icon (Negative):** Saves `feedback = "negative"`.
-* 5.1.2. **`-` / Single Minus Icon (Neutral):** Saves `feedback = "neutral"`.
-* 5.1.3. **`+` / Single Plus Icon (Positive):** Saves `feedback = "positive"`.
-* 5.1.4. **`++` / Double Plus Icon (Extra Positive):** Saves `feedback = "extra_positive"`.
+### 5.1 Button Mappings & Actions
+* 5.1.1. **`--` / Double Minus Icon (Negative):** Saves `feedback = "negative"` in Firestore.
+* 5.1.2. **`-` / Single Minus Icon (Neutral):** Saves `feedback = "neutral"` in Firestore.
+* 5.1.3. **`+` / Single Plus Icon (Positive):** Saves `feedback = "positive"` in Firestore.
+* 5.1.4. **`++` / Double Plus Icon (Extra Positive):** Saves `feedback = "extra_positive"` in Firestore.
+* 5.1.5. **`Skip` Button:** Does not update the `feedback` field in Firestore (remains `null` for later review) and advances the view.
 
 ---
 
@@ -138,8 +146,8 @@ Every post card renders:
 * 6.1.6. **Metadata Footer:** Display relative timestamp and the Gemini explanation text.
 * 6.1.7. **Engagement Buttons:** Render active Like button (calls PDS `app.bsky.feed.like`), Follow button (calls PDS `app.bsky.graph.follow`), and Open button (opens `https://bsky.app/profile/{authorDid}/post/{rkey}`).
 * 6.1.8. **Feedback Action Row:**
-  - 6.1.8.1. Desktop: Render inside the card footer.
-  - 6.1.8.2. Mobile: Exclude from card; routing occurs through the fixed action bar.
+  - 6.1.8.1. Desktop: Render inside the card footer (including the feedback options and the Skip button).
+  - 6.1.8.2. Mobile: Exclude from card; routing occurs through the fixed action bar (including the feedback options and the Skip button).
 
 ---
 

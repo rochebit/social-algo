@@ -15,8 +15,8 @@ We are specifying a hybrid system to monitor the AT Protocol firehose for develo
 - 🏗️ **[System Architecture](file:///c:/Users/roche/Projects/social/atproto/spec/architecture.md):** High-level topology, data synchronization boundaries, and external application linking.
 - 🗃️ **[Firestore Schema & Security](file:///c:/Users/roche/Projects/social/atproto/spec/data_models/firestore_schema.md):** Document formats, collections, required indexes, and Firebase Security Rules.
 - ⚙️ **[Filtering Pipeline & Feedback](file:///c:/Users/roche/Projects/social/atproto/spec/workflows/filtering_pipeline.md):** Ingestion, rules, Gemini LLM classification prompt, bypassing options, and simple feedback tracking.
-- 📱 **[Dashboard UI & Layout](file:///c:/Users/roche/Projects/social/atproto/spec/api/dashboard_ui.md):** Routing, authentication checks, post card visual hierarchy, and feedback updates.
-- 🧪 **[Test & Verification Scenarios](file:///c:/Users/roche/Projects/social/atproto/spec/verification/test_scenarios.md):** Test scenarios for Firebase security rules, ingestion filtering mocks, and UI formatting links.
+- 📱 **[Dashboard UI & Layout](file:///c:/Users/roche/Projects/social/atproto/spec/api/dashboard_ui.md):** Routing, authentication checks, post card visual hierarchy, logo reload, skip buttons, and viewport adaptations.
+- 🧪 **[Test & Verification Scenarios](file:///c:/Users/roche/Projects/social/atproto/spec/verification/test_scenarios.md):** Test scenarios for Firebase security rules, ingestion filtering mocks, UI actions, and implementing agent guidelines.
 - 🚀 **[Deployment Guide](file:///c:/Users/roche/Projects/social/atproto/spec/deployment/guide.md):** CLI commands, Firebase configurations, environment variables, and Docker Compose processes.
 
 ---
@@ -30,6 +30,7 @@ To ensure that specifications written here are flawless and ready for execution,
 3. **No Unconfirmed Assumptions:** Do not make undocumented or unconfirmed assumptions. All assumptions must be recorded explicitly as open items to be confirmed by the user.
 4. **Proactive Clarification:** Ask the user clarifying questions immediately when requirements are underspecified or ambiguous. Do not proceed with vague designs.
 5. **Hierarchical Decomposition:** Work from high-level summaries down to highly granular component specifications across multiple files.
+6. **Implementing Agent Visual Testing:** When updating the frontend, the implementing agent must open the application, visually inspect the rendering on both desktop and mobile viewports, and actively fix layout or presentation bugs. It must implement a test login or guest bypass mechanism to perform local verification but is strictly forbidden from writing or submitting actual feedback on behalf of the owner.
 
 For full, detailed instructions, see the sub-documents in the [guidelines/](file:///c:/Users/roche/Projects/social/atproto/spec/guidelines) directory:
 
