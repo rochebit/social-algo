@@ -237,13 +237,15 @@ These scenarios verify client-side CSS layouts, state transitions, PWA metadata,
 ### 7.5 Mobile Fullscreen Layout
 * 7.5.1. **Test Setup:** Set browser window viewport sizes to simulate a Pixel 10 Pro XL (width `412px`, height `915px`), with mock system notch safe area variables (`env(safe-area-inset-top)` set to `44px` and `env(safe-area-inset-bottom)` set to `34px`).
 * 7.5.2. **Assertions:**
-  - 7.5.2.1. Global styles apply `box-sizing: border-box`. Outer container disables body scrolling (`overflow: hidden`).
-  - 7.5.2.2. The active card's viewport height matches the computation: `calc(100dvh - 56px - 72px - env(safe-area-inset-top) - env(safe-area-inset-bottom))`.
-  - 7.5.2.3. The active card scroll container enables internal scrolling (`overflow-y: auto`) and defines a bottom buffer (`padding-bottom: 80px`).
-  - 7.5.2.4. The bottom action bar clears the swipe indicators: `height: calc(72px + env(safe-area-inset-bottom))` with a padding bottom of `env(safe-area-inset-bottom)`.
-  - 7.5.2.5. Only **one** post card is rendered in the viewport (matching `posts[activePostIndex]`).
-  - 7.5.2.6. Clicking any action button increments `activePostIndex` to `1`, transitioning card `0` out and card `1` in.
-  - 7.5.2.7. Action bar does not shift height or overlap content area.
+  - 7.5.2.1. Global `html` and `body` margin and padding are set to `0`, and overflow is set to `hidden`.
+  - 7.5.2.2. Global elements apply `box-sizing: border-box`. The root wrapper container uses `display: flex; flex-direction: column; width: 100vw; height: 100dvh; overflow: hidden;`.
+  - 7.5.2.3. The root wrapper padding-top is `env(safe-area-inset-top)`.
+  - 7.5.2.4. The active card's viewport height matches the computation: `calc(100dvh - 56px - 72px - env(safe-area-inset-top) - env(safe-area-inset-bottom))`.
+  - 7.5.2.5. The active card scroll container enables internal scrolling (`overflow-y: auto`) and defines a bottom buffer (`padding-bottom: 80px`).
+  - 7.5.2.6. The bottom action bar clears the swipe indicators: `height: calc(72px + env(safe-area-inset-bottom))` with a padding bottom of `env(safe-area-inset-bottom)`.
+  - 7.5.2.7. Only **one** post card is rendered in the viewport (matching `posts[activePostIndex]`).
+  - 7.5.2.8. Clicking any action button increments `activePostIndex` to `1`, transitioning card `0` out and card `1` in.
+  - 7.5.2.9. Action bar does not shift height or overlap content area.
 
 ### 7.6 PWA Asset Verification
 * 7.6.1. **Test Action:** Request `/manifest.json` and `/sw.js` HTTP endpoints.

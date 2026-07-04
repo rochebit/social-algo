@@ -83,10 +83,13 @@ To prevent posts from shifting or moving while reading, the feed does **not** bi
 The dashboard presents different layouts depending on the user's screen width, optimized for modern high-resolution displays and safe areas (e.g., Pixel 10 Pro XL).
 
 ### 4.1 Mobile Single-Post View (`@media (max-width: 639px)`)
-* 4.1.1. **Viewport Constraints:** Lock the outer container to `width: 100vw` and height `100dvh` (dynamic viewport height). Set `box-sizing: border-box` globally on all elements. Apply safe-area paddings: `padding-top: env(safe-area-inset-top, 16px)` to prevent status bar or notch overlaps.
+* 4.1.1. **Viewport Constraints & Reset:**
+  - 4.1.1.1. **Global Reset:** Reset the `html` and `body` elements explicitly to `margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;` to ensure default browser margins do not cause viewport overflows.
+  - 4.1.1.2. **Root Layout Wrapper:** Set the outer root container to `display: flex; flex-direction: column; width: 100vw; height: 100dvh; overflow: hidden; box-sizing: border-box;`.
+  - 4.1.1.3. **Top Safe-Area Clearance:** Apply padding to the root layout wrapper `padding-top: env(safe-area-inset-top, 16px)` to prevent status bar/notch overlaps.
 * 4.1.2. **Active Post State:** Maintain an integer state variable: `activePostIndex = 0`.
 * 4.1.3. **Card Rendering:** Render **only** the single post card matching `posts[activePostIndex]`. Center it on screen with a dynamic viewport height layout.
-  - 4.1.3.1. **Height Calculation:** The card scroll viewport must be strictly bound to: `height: calc(100dvh - 56px - 72px - env(safe-area-inset-top, 16px) - env(safe-area-inset-bottom, 16px))` (header height is 56px, bottom bar is 72px).
+  - 4.1.3.1. **Height Calculation:** The active card scrollable viewport must be strictly bound to: `height: calc(100dvh - 56px - 72px - env(safe-area-inset-top, 16px) - env(safe-area-inset-bottom, 16px))` (header height is 56px, bottom bar is 72px).
   - 4.1.3.2. **Internal Scroll:** Set `overflow-y: auto` inside the card container to gracefully support long text and deep nested threads.
   - 4.1.3.3. **Bottom Buffer:** Include `padding-bottom: 80px` in the scrollable card box to prevent content clipping behind the fixed action bar.
 * 4.1.4. **Fixed Bottom Action Bar:** Render a sticky action bar container:
