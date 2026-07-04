@@ -67,16 +67,58 @@ To minimize LLM token usage and latency, posts must pass a rule-based pre-filter
 
 ### 3.3 Keyword & Regex Matching (For General Network Posts)
 If the author is not in your network graph, the post text must match any of the following case-insensitive regex patterns:
-* 3.3.1. `\batproto\b` (AT Protocol)
-* 3.3.2. `\bbluesky\s+dev\b` (Bluesky Dev)
-* 3.3.3. `\blexicon\b` (ATProto Lexicon definitions)
-* 3.3.4. `\bpds\b` (Personal Data Server)
-* 3.3.5. `\bxrpc\b` (ATProto RPC protocol)
-* 3.3.6. `\bappview\b` (AppView indexing)
-* 3.3.7. `\bdid:plc:\w+\b` (DIDs)
-* 3.3.8. `\bat://\w+\b` (AT URI scheme)
-* 3.3.9. `\bfederat(e|ion)\b` (Federation context)
-* 3.3.10. `\bself-host(ing|ed)?\b` (Self-hosting)
+
+#### 3.3.1 AT Protocol & Bluesky Keywords
+* 3.3.1.1. `\batproto\b` (AT Protocol)
+* 3.3.1.2. `\bbluesky\s+(api|dev|sdk)\b` (Bluesky development context)
+* 3.3.1.3. `\blexicon(s)?\b` (ATProto Lexicon definitions)
+* 3.3.1.4. `\bpds\b` (Personal Data Server)
+* 3.3.1.5. `\bxrpc\b` (ATProto RPC protocol)
+* 3.3.1.6. `\bappview\b` (AppView indexing)
+* 3.3.1.7. `\bdid:(plc|web)\b` (Decentralized Identifiers)
+* 3.3.1.8. `\bat://\S+\b` (AT URI scheme)
+* 3.3.1.9. `\bfirehose\b` (ATProto event stream)
+* 3.3.1.10. `\bjetstream\b` (Bluesky Jetstream firehose consumer)
+* 3.3.1.11. `\brelay\b` (ATProto relay infrastructure)
+* 3.3.1.12. `\bfeed\s*gen(erator)?\b` (ATProto feed generators)
+* 3.3.1.13. `\blabeler\b` (ATProto labeling service)
+* 3.3.1.14. `\bozone\b` (Bluesky moderation tooling)
+* 3.3.1.15. `\bdata\s*repo(sitory)?\b` (ATProto data repositories)
+* 3.3.1.16. `\b(app\.bsky|com\.atproto)\b` (ATProto NSID namespaces)
+* 3.3.1.17. `\bbsky\.(social|app)\b` (Bluesky service domains)
+
+#### 3.3.2 ActivityPub & Fediverse Keywords
+* 3.3.2.1. `\bactivitypub\b` (ActivityPub protocol)
+* 3.3.2.2. `\bfediverse\b` (Fediverse ecosystem)
+* 3.3.2.3. `\bmastodon\b` (Mastodon platform)
+* 3.3.2.4. `\bwebfinger\b` (WebFinger discovery protocol)
+* 3.3.2.5. `\bactivity\s*streams\b` (ActivityStreams data format)
+* 3.3.2.6. `\bnodeinfo\b` (NodeInfo server metadata)
+* 3.3.2.7. `\bmisskey\b` (Misskey platform)
+* 3.3.2.8. `\bpleroma\b` (Pleroma platform)
+* 3.3.2.9. `\blemmy\b` (Lemmy federated link aggregation)
+* 3.3.2.10. `\bpixelfed\b` (Pixelfed federated image sharing)
+* 3.3.2.11. `\bgotosocial\b` (GoToSocial AP server)
+* 3.3.2.12. `\bakkoma\b` (Akkoma fediverse server)
+* 3.3.2.13. `\bsharkey\b` (Sharkey Misskey fork)
+* 3.3.2.14. `\bfederated\s+timeline\b` (Fediverse timeline concepts)
+
+#### 3.3.3 Adjacent Protocols & Standards
+* 3.3.3.1. `\bnostr\b` (Nostr protocol)
+* 3.3.3.2. `\bfarcaster\b` (Farcaster protocol)
+* 3.3.3.3. `\bindieweb\b` (IndieWeb movement)
+* 3.3.3.4. `\bwebmention\b` (Webmention protocol)
+* 3.3.3.5. `\bsolid\s+(protocol|pod|project)\b` (Solid decentralized data platform)
+* 3.3.3.6. `\blinked\s*data\b` (Linked Data / JSON-LD context)
+
+#### 3.3.4 General Open Social Web Keywords
+* 3.3.4.1. `\bfederat(e|ed|ion|ing)\b` (Federation context)
+* 3.3.4.2. `\bself-host(ing|ed)?\b` (Self-hosting)
+* 3.3.4.3. `\bopen\s+social\b` (Open social web)
+* 3.3.4.4. `\bdecentraliz(e|ed|ation|ing)\b` (Decentralized social)
+* 3.3.4.5. `\bsocial\s+(web|protocol|graph|interop)\b` (Social web development)
+* 3.3.4.6. `\bprotocol\s+interop(erability)?\b` (Protocol interoperability)
+* 3.3.4.7. `\bsocial\s+network\s+(protocol|standard)\b` (Social network protocols)
 
 ### 3.4 Curated Whitelist Matching
 * 3.4.1. **Rule:** Check if the post `authorDid` matches an entry in the locally stored whitelist file (`curated_devs.json`), or is a reply to/repost of someone on that list.
@@ -251,6 +293,76 @@ graph TD
 * 8.2.4. **Outcome Routing:**
   - 8.2.4.1. If `isRelevant == true`, generate the payload and insert a row into the SQLite table `posts_outbox` with `action = 'write'` and `status = 'pending'`.
   - 8.2.4.2. If `isRelevant == false`, discard the post immediately.
+
+* 8.2.5. **System Prompt:** The following exact text must be sent as the system instruction to the Gemini model. It must not be modified by the implementing agent.
+
+```
+You are a relevance filter for an open social web developer feed. Your job is to evaluate social media posts and determine whether they are worth surfacing to a software engineer who is active in the AT Protocol (atproto) and ActivityPub developer ecosystems and works at Google.
+
+The engineer wants to:
+- Stay current on technical developments across atproto, ActivityPub, the fediverse, and the broader open/decentralized social web.
+- Find posts worth reading for learning or situational awareness.
+- Find posts with a natural opening to reply — such as technical questions, proposals, pain points, or discussions — where a knowledgeable response would be valuable and help build their reputation in the community.
+
+Evaluate the post based on these criteria:
+
+HIGH RELEVANCE (score 80-100):
+- Someone asking a technical question about atproto, ActivityPub, PDS hosting, Lexicon design, feed generators, federation, or related protocol internals.
+- Proposals, RFCs, or design discussions for new protocol features or changes.
+- Posts discussing interoperability between atproto, ActivityPub, Nostr, or other decentralized protocols.
+- Developer experience pain points, bug reports, or frustrations with protocol tooling.
+- Posts about Google's involvement with the open social web, social interoperability, or related standards work.
+- Any post where a thoughtful technical reply would be especially impactful.
+
+MEDIUM RELEVANCE (score 50-79):
+- Announcements of new tools, libraries, bots, or projects built on atproto or ActivityPub.
+- Technical blog posts, tutorials, or documentation being shared.
+- General developer discussion about federation architecture, self-hosting, or decentralized identity.
+- Posts from developers sharing what they are building, with enough technical detail to be interesting.
+
+LOW RELEVANCE (score 20-49):
+- Tangential ecosystem commentary with little technical substance.
+- Posts that mention relevant keywords but are primarily about non-technical topics (e.g., moderation policy debates, social commentary).
+- Simple project announcements with no technical depth.
+
+IRRELEVANT (score 0-19, mark isRelevant = false):
+- Casual "I love Bluesky" or "I joined Mastodon" sentiment with no technical content.
+- Memes, jokes, or shitposts that happen to mention a relevant keyword.
+- Pure news resharing or link drops with no added commentary.
+- Marketing, self-promotion spam, or engagement bait.
+- Culture war or political content that tangentially references decentralized social media.
+
+IMPORTANT RULES:
+- Evaluate the post on its own content merit. Do not factor in who the author is.
+- If parent or quoted post context is provided, use it to better understand the conversation. A reply that seems vague on its own may be highly relevant in the context of a technical thread.
+- A post routed via a like or repost from someone the engineer follows has already passed a social signal check; still evaluate it on content merit but recognize it reached the pipeline through trusted network activity.
+- When scoring, give higher weight to posts where there is a clear opportunity to respond and add value versus posts that are just interesting to read.
+- Be concise in your reasoning (1-2 sentences).
+```
+
+* 8.2.6. **User Prompt Template:** For each post evaluated, construct the user message using the following template. All placeholder values are substituted from the post's parsed data. Optional sections are omitted entirely when the corresponding context is `null`.
+
+```
+Evaluate this post for relevance:
+
+--- POST ---
+{postText}
+--- END POST ---
+
+[INCLUDED ONLY IF parentContext IS NOT NULL]
+--- PARENT POST (this post is a reply to) ---
+Author: {parentContext.authorHandle}
+{parentContext.text}
+--- END PARENT POST ---
+
+[INCLUDED ONLY IF quotedContext IS NOT NULL]
+--- QUOTED POST (this post is quoting) ---
+Author: {quotedContext.authorHandle}
+{quotedContext.text}
+--- END QUOTED POST ---
+
+Capture path: {matchRules}
+```
 
 ---
 
