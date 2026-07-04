@@ -81,7 +81,11 @@ const FIREBASE_PROJECT_ID = import.meta.env.VITE_FIREBASE_PROJECT_ID;
 const OWNER_EMAIL = import.meta.env.VITE_OWNER_EMAIL || "owner@gmail.com";
 
 const isMockMode =
-  !FIREBASE_API_KEY || FIREBASE_API_KEY === "your_api_key_here" || !FIREBASE_PROJECT_ID;
+  !FIREBASE_API_KEY ||
+  FIREBASE_API_KEY === "your_api_key_here" ||
+  !FIREBASE_PROJECT_ID ||
+  import.meta.env.DEV ||
+  window.location.search.includes("mock=true");
 
 let firebaseAuth: any = null;
 let firestoreDb: any = null;
@@ -512,6 +516,7 @@ export function App() {
   // Mock data store
   const [mockPostsStore, setMockPostsStore] = useState<Post[]>(MOCK_DB_POSTS);
   const [totalUnreviewed, setTotalUnreviewed] = useState<number>(0);
+  const [skippedPostIds, setSkippedPostIds] = useState<Set<string>>(new Set());
 
   // -----------------------------------------------------------------------
   // Responsive Handler & Scroll Lock
@@ -535,6 +540,40 @@ export function App() {
       document.body.style.height = "";
     }
   }, [isMobile]);
+
+  const handleLogoClick = async () => {
+    try {
+      if ("serviceWorker" in navigator) {
+        const registration = await navigator.serviceWorker.ready;
+        await registration.update();
+      }
+    } catch (err) {
+      console.warn("Service worker update failed:", err);
+    } finally {
+      window.location.reload();
+    }
+  };
+
+  const handleSkip = (postId: string) => {
+    if (isMobile) {
+      setSwipeDir("swiping-left");
+    } else {
+      setExitingCards((prev) => ({ ...prev, [postId]: true }));
+    }
+    setTimeout(() => {
+      if (isMobile) {
+        setSwipeDir(null);
+        setActivePostIndex((prev) => prev + 1);
+      } else {
+        setSkippedPostIds((prev) => new Set([...prev, postId]));
+        setExitingCards((prev) => {
+          const next = { ...prev };
+          delete next[postId];
+          return next;
+        });
+      }
+    }, 250);
+  };
 
   // Reset active post card index when switching feeds
   useEffect(() => {
@@ -903,7 +942,7 @@ export function App() {
 
   const renderHeader = () => (
     <header>
-      <div className="header-brand">
+      <div className="header-brand" onClick={handleLogoClick} style={{ cursor: "pointer" }} title="Click to refresh and check for updates">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--primary)" }}>
           <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
           <polyline points="2 17 12 22 22 17"></polyline>
@@ -1047,6 +1086,9 @@ export function App() {
                   </button>
                   <button className="btn btn-sm btn-fb" style={{ color: "var(--success)" }} onClick={() => handleFeedback(post.id, "extra_positive")} title="Extra Positive (++)">
                     ++
+                  </button>
+                  <button className="btn btn-sm btn-fb btn-skip" style={{ color: "var(--text-muted)", marginLeft: "8px" }} onClick={() => handleSkip(post.id)} title="Skip post (without rating)">
+                    Skip
                   </button>
                 </>
               ) : (
@@ -1209,6 +1251,10 @@ export function App() {
                     <span className="fb-symbol">++</span>
                     <span className="fb-label">Extra Pos.</span>
                   </button>
+                  <button className="btn btn-fb-mobile btn-skip-mobile" onClick={() => handleSkip(activePost.id)} style={{ color: "var(--text-muted)" }}>
+                    <span className="fb-symbol">↷</span>
+                    <span className="fb-label">Skip</span>
+                  </button>
                 </>
               ) : (
                 <button className="btn btn-reset-mobile" onClick={() => handleResetFeedback(activePost.id)}>
@@ -1267,7 +1313,7 @@ export function App() {
                   )}
                 </div>
               ) : (
-                posts.map((post) => renderPostCard(post))
+                posts.filter((p) => !skippedPostIds.has(p.id)).map((post) => renderPostCard(post))
               )}
             </div>
           )}

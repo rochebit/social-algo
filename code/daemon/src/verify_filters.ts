@@ -186,9 +186,40 @@ async function runTests() {
   assert(writtenPosts.length === 1, "Should write evaluated post to Firestore");
 
   // ----------------------------------------------------
-  // Scenario 2.4: Deletion Propagation
+  // Scenario 2.4: Non-English Post Discard
   // ----------------------------------------------------
-  console.log("\nScenario 2.4: Deletion Propagation...");
+  console.log("\nScenario 2.4: Non-English Post Discard...");
+  const nonEnglishPostEvent = {
+    did: "did:plc:rpqw572o3uowvjscsps5u7e6",
+    time_us: 1715623456789012,
+    kind: "commit",
+    commit: {
+      rev: "3ks5z3a2jzk2c",
+      operation: "create",
+      collection: "app.bsky.feed.post",
+      rkey: "3ks5z3a2jzk2f",
+      cid: "bafyreihymx6",
+      record: {
+        $type: "app.bsky.feed.post",
+        text: "My new atproto app in Rust is live, running my own PDS now!", // matches keywords
+        createdAt: "2026-07-01T11:45:00.000Z",
+        langs: ["ja"] // Japanese language
+      }
+    }
+  };
+
+  writtenPosts.length = 0;
+  geminiCallCount = 0;
+  await handleCommit(nonEnglishPostEvent, "did:plc:owner123");
+  await processOutbox();
+
+  assert(geminiCallCount === 0, "Should immediately discard non-English post and NOT query Gemini");
+  assert(writtenPosts.length === 0, "Should NOT write non-English post to Firestore");
+
+  // ----------------------------------------------------
+  // Scenario 2.5: Deletion Propagation
+  // ----------------------------------------------------
+  console.log("\nScenario 2.5: Deletion Propagation...");
   const deleteEvent = {
     did: "did:plc:rpqw572o3uowvjscsps5u7e6",
     time_us: 1715623458999999,

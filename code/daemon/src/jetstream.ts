@@ -585,15 +585,20 @@ export async function handleCommit(msg: any, userDid: string): Promise<void> {
         const record = commit.record;
         if (!record || !record.text) return;
 
+        // 3.1 Language Gate (Preliminary Check)
+        if (Array.isArray(record.langs) && record.langs.length > 0 && !record.langs.includes("en")) {
+          return;
+        }
+
         let isMatch = false;
         const matchRules: string[] = [];
 
-        // Condition 1: 1st-degree network graph match — bypass keyword filter (Section 3.1)
+        // Condition 1: 1st-degree network graph match — bypass keyword filter (Section 3.2)
         if (isFollowed(authorDid)) {
           isMatch = true;
           matchRules.push("network:social-graph");
         } else {
-          // Condition 2: Keyword/regex match (Section 3.2)
+          // Condition 2: Keyword/regex match (Section 3.3)
           for (const rule of REGEX_RULES) {
             if (rule.regex.test(record.text)) {
               isMatch = true;
@@ -601,7 +606,7 @@ export async function handleCommit(msg: any, userDid: string): Promise<void> {
             }
           }
 
-          // Condition 3: Curated whitelist match (Section 3.3)
+          // Condition 3: Curated whitelist match (Section 3.4)
           const whitelist = getCuratedDevs();
           if (whitelist.has(authorDid)) {
             isMatch = true;
