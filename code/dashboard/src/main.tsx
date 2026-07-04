@@ -374,15 +374,68 @@ function MediaEmbedRenderer({
 // Parent Thread Resolver (Section 6.1.2 — Zero Truncation Rule)
 // -----------------------------------------------------------------------
 
+function mapAppViewEmbed(embed: any): MediaEmbed | null {
+  if (!embed) return null;
+  const type = embed.$type;
+
+  if (type === "app.bsky.embed.images#view" && Array.isArray(embed.images)) {
+    return {
+      type: "images",
+      images: embed.images.map((img: any) => ({
+        thumbUrl: img.thumb,
+        fullsizeUrl: img.fullsize,
+        alt: img.alt || ""
+      }))
+    };
+  }
+
+  if (type === "app.bsky.embed.external#view" && embed.external) {
+    return {
+      type: "external",
+      externalLink: {
+        uri: embed.external.uri,
+        title: embed.external.title || "",
+        description: embed.external.description || "",
+        thumbUrl: embed.external.thumb
+      }
+    };
+  }
+
+  if (type === "app.bsky.embed.video#view" && embed.playlist) {
+    return {
+      type: "video",
+      video: {
+        playlistUrl: embed.playlist,
+        thumbnailUrl: embed.thumbnail || ""
+      }
+    };
+  }
+
+  if (type === "app.bsky.embed.recordWithMedia#view" && embed.media) {
+    return mapAppViewEmbed(embed.media);
+  }
+
+  return null;
+}
+
 interface ThreadPost {
   uri: string;
   authorHandle: string;
   authorDisplayName?: string;
   authorAvatar?: string;
   text: string;
+  mediaEmbed?: MediaEmbed | null;
 }
 
-function ThreadView({ postUri, fallbackParent }: { postUri: string; fallbackParent: PostContext }) {
+function ThreadView({
+  postUri,
+  fallbackParent,
+  onImageClick
+}: {
+  postUri: string;
+  fallbackParent: PostContext;
+  onImageClick: (url: string) => void;
+}) {
   const [ancestors, setAncestors] = useState<ThreadPost[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -406,7 +459,8 @@ function ThreadView({ postUri, fallbackParent }: { postUri: string; fallbackPare
                 authorHandle: curr.post.author?.handle || curr.post.author?.did || "unknown",
                 authorDisplayName: curr.post.author?.displayName,
                 authorAvatar: curr.post.author?.avatar,
-                text: curr.post.record?.text || ""
+                text: curr.post.record?.text || "",
+                mediaEmbed: mapAppViewEmbed(curr.post.embed)
               });
             }
             curr = curr.parent;
@@ -471,6 +525,11 @@ function ThreadView({ postUri, fallbackParent }: { postUri: string; fallbackPare
               {ancestor.authorDisplayName && <span className="thread-handle"> @{ancestor.authorHandle}</span>}
             </div>
             <div className="thread-text">{ancestor.text}</div>
+            {ancestor.mediaEmbed && ancestor.mediaEmbed.type !== "none" && (
+              <div className="thread-ancestor-media">
+                <MediaEmbedRenderer mediaEmbed={ancestor.mediaEmbed} onImageClick={onImageClick} />
+              </div>
+            )}
           </div>
         </div>
       ))}
@@ -1001,6 +1060,7 @@ export function App() {
     const isExiting = exitingCards[post.id];
     let scoreClass = "medium";
     if (post.relevanceScore >= 80) scoreClass = "high";
+    else if (post.relevanceScore < 50) scoreClass = "low";
     if (post.relevanceExplanation === "AI filtering bypassed") scoreClass = "bypass";
 
     const uriParts = post.uri.split("/");
@@ -1032,7 +1092,7 @@ export function App() {
 
         {/* Parent Context Thread Resolver (Section 6.1.2) */}
         {post.parentContext && (
-          <ThreadView postUri={post.uri} fallbackParent={post.parentContext} />
+          <ThreadView postUri={post.uri} fallbackParent={post.parentContext} onImageClick={setLightboxUrl} />
         )}
 
         {/* Post Body with Facet-based Rich Text (Section 4.3) */}
