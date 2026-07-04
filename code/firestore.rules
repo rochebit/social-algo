@@ -1,0 +1,23 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if the user is signed in and matches the owner email
+    function isOwner() {
+      return request.auth != null 
+        && request.auth.token.email_verified == true
+        && request.auth.token.email == "rochebit@gmail.com";
+    }
+
+    // Rule for matching posts
+    match /posts/{postId} {
+      allow read, write: if isOwner();
+    }
+
+    // Rule for logging feedback
+    match /feedback_logs/{feedbackId} {
+      allow read, write: if isOwner();
+    }
+  }
+}

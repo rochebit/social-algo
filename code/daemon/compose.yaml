@@ -1,0 +1,20 @@
+services:
+  feed-monitor-daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: feed-monitor-daemon
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      # Mount the Service Account JSON credentials
+      - ./firebase-credentials.json:/app/firebase-credentials.json:ro
+      # Mount a local directory to persist cursor sequence numbers and logs
+      - ./data:/app/data:rw
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

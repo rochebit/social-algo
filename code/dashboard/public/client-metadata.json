@@ -1,0 +1,16 @@
+{
+  "client_id": "https://rochebit-social.web.app/client-metadata.json",
+  "client_name": "ATProto Dev Feed Monitor",
+  "client_uri": "https://rochebit-social.web.app",
+  "redirect_uris": [
+    "https://rochebit-social.web.app/feed",
+    "http://localhost:5173/feed",
+    "http://127.0.0.1:5173/feed"
+  ],
+  "scope": "atproto",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none",
+  "application_type": "web",
+  "dpop_bound_access_tokens": true
+}

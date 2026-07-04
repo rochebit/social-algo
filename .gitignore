@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+dist/
+.firebase/
+
+# Environment and Credentials
+.env
+.env.local
+.env.*.local
+firebase-credentials.json
+
+# Local database and persistent runtime assets
+data/
+*.db
+*.db-journal
+*.db-wal
+cursor.json
+feedback_archive.jsonl
+curated_devs.json
+
+# OS files
+.DS_Store
+Thumbs.db
