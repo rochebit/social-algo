@@ -1,6 +1,6 @@
 # Dashboard UI & Layout Specification
 
-This document details the page layout, PWA specifications, component definitions, queries, media rendering, and stable viewport interactions for the Firebase-hosted Web Dashboard.
+This document details the page layout, PWA specifications, component definitions, queries, media rendering, stable viewport interactions, and real-time counters for the Firebase-hosted Web Dashboard.
 
 ---
 
@@ -29,29 +29,16 @@ The dashboard is structured as a single-page application (SPA) containing three 
 ### 2.2 ATProto OAuth Session (Bluesky Access)
 To interact with the Bluesky API for Liking and Following, the app maintains a client-side OAuth session.
 - **Connect Trigger:** A "Connect Bluesky Account" button is rendered in the dashboard header if no active ATProto session token exists in LocalStorage.
-- **Metadata Configuration:** The dashboard must serve a valid OAuth client metadata document at `https://social.rochebit.net/client-metadata.json` matching:
-  ```json
-  {
-    "client_id": "https://social.rochebit.net/client-metadata.json",
-    "client_name": "ATProto Dev Feed Monitor",
-    "client_uri": "https://social.rochebit.net",
-    "redirect_uris": ["https://social.rochebit.net/feed"],
-    "scope": "atproto",
-    "grant_types": ["authorization_code", "refresh_token"],
-    "response_types": ["code"],
-    "token_endpoint_auth_method": "none",
-    "application_type": "web",
-    "dpop_bound_access_tokens": true
-  }
-  ```
+- **Metadata Configuration:** The dashboard must serve a valid OAuth client metadata document at `{ORIGIN}/client-metadata.json`.
 
 ---
 
-## 3. Stable Viewport Feed Query Logic
+## 3. Stable Viewport Feed Query & Counters
 
 To prevent posts from shifting or moving while reading, the feed does **not** bind a real-time listener directly to the view. Instead, it uses a manual-refresh pagination model.
 
-### 3.1 Page Load Query (Stale Read Window)
+### 3.1 Consistent Score-Sorted Feed Query
+To ensure that refreshing the page displays the same posts in the same order as feed progression (showing the most relevant items first):
 1. **Initialize State:** When `/feed` mounts, record `pageLoadTime = new Date().toISOString()`.
 2. **Execute Static Fetch:** Query Firestore once (`.get()`):
    - **Collection:** `posts`
@@ -59,7 +46,9 @@ To prevent posts from shifting or moving while reading, the feed does **not** bi
      - `isDeleted == false`
      - `feedback == null`
      - `matchedAt <= pageLoadTime`
-   - **Sorting:** `matchedAt` (Descending)
+   - **Sorting:**
+     - First Sort: **`relevanceScore` (Descending)** (shows best posts first)
+     - Second Sort: **`matchedAt` (Descending)** (fallback chronological order)
    - **Limit:** 50 documents.
 3. Render this static array. The items remain completely stationary.
 
@@ -68,28 +57,32 @@ To prevent posts from shifting or moving while reading, the feed does **not** bi
 2. If the snapshot returns a count `N > 0`, display a floating, sticky banner at the top center of the viewport: `[ 🗘 Load {N} new posts ]`.
 3. **Click Action:** Update `pageLoadTime`, re-run static query, replace feed state, and scroll back to top.
 
+### 3.3 Real-Time Review Counter
+To keep track of how many posts are left to review:
+1. **Query Definition:** The UI establishes a real-time listener snapshot checking the total count of unreviewed items:
+   ```javascript
+   db.collection('posts')
+     .where('isDeleted', '==', false)
+     .where('feedback', '==', null)
+     .onSnapshot(snapshot => {
+       const totalUnreviewed = snapshot.size;
+       updateUnreviewedCounterUI(totalUnreviewed);
+     });
+   ```
+2. **Visual Placement:** Display the count prominently in the top header: `[ {N} posts remaining to review ]` (e.g. bold slate text, badge icon).
+3. **Dynamic Updates:**
+   - When the user rates a post (setting `feedback`), the count immediately decrements by 1.
+   - When the ingestion daemon pushes new matches to Firestore, the count immediately increments.
+
 ---
 
 ## 4. Layout & Viewport Variations (Mobile vs. Desktop)
 
 The dashboard presents different layouts depending on the user's screen width.
 
-```mermaid
-graph TD
-    Start[Detect Viewport Width] --> CheckWidth{Width < 640px?}
-    
-    CheckWidth -- Yes Mobile --> RenderMobile[Mobile Viewport: Single Post View]
-    RenderMobile --> StateControl[activePostIndex state tracks index]
-    RenderMobile --> FixedButtons[Fixed Bottom Action Bar: -- - + ++]
-    
-    CheckWidth -- No Desktop --> RenderDesktop[Desktop Viewport: Multi-Post Feed]
-    RenderDesktop --> MultiScroll[Scrollable list showing multiple cards]
-    RenderDesktop --> CardActionButtons[Action buttons rendered in each card]
-```
-
 ### 4.1 Mobile Single-Post View (`@media (max-width: 639px)`)
 To optimize parsing speed on a phone, the mobile UI presents posts one-at-a-time in full screen.
-- **Fullscreen Container:** The main viewport is locked to `width: 100vw` and height `100dvh` (dynamic viewport height to adjust for mobile browser bars). Scrolling on the main body is disabled (`overflow: hidden`).
+- **Fullscreen Container:** The main viewport is locked to `width: 100vw` and height `100dvh` (dynamic viewport height). Scrolling on the main body is disabled (`overflow: hidden`).
 - **Active Post State:** The React/SPA client maintains an integer state `activePostIndex = 0`.
 - **Card Rendering:** The UI renders **only** the single post card matching `posts[activePostIndex]`. This card is centered on screen, takes up 100% of available height (with internal scrolling enabled for very long posts), and has a bottom padding of `80px` to clear the action bar.
 - **Fixed Bottom Action Bar:** A sticky container anchored at the bottom of the screen:
@@ -109,7 +102,7 @@ To optimize parsing speed on a phone, the mobile UI presents posts one-at-a-time
 
 ## 5. Extended Feedback Action Buttons
 
-Instead of a simple binary rating, the UI displays four small, iconized/symbolic feedback buttons.
+Instead of a simple binary rating, the UI displays four small, iconized/symbolic feedback buttons:
 
 ```text
 +---------------------------------------------+
@@ -120,27 +113,29 @@ Instead of a simple binary rating, the UI displays four small, iconized/symbolic
 
 ### 5.1 Button Mappings & Firestore Values
 Clicking a button sets the corresponding string in the post's `feedback` field in Firestore:
-
-1. **`--` / Double Minus Icon (Negative):**
-   - Saves `feedback = "negative"`.
-   - Represents off-topic, spam, or noise.
-2. **`-` / Single Minus Icon (Neutral):**
-   - Saves `feedback = "neutral"`.
-   - Represents dev-related posts that you have no personal interest in.
-3. **`+` / Single Plus Icon (Positive):**
-   - Saves `feedback = "positive"`.
-   - Represents relevant, high-signal developer topics.
-4. **`++` / Double Plus Icon (Extra Positive):**
-   - Saves `feedback = "extra_positive"`.
-   - Represents highly important or actionable community updates, library launches, or self-hosted announcements.
+- **`--` / Double Minus Icon (Negative):** Saves `feedback = "negative"`. (Noise/Spam)
+- **`-` / Single Minus Icon (Neutral):** Saves `feedback = "neutral"`. (Uninterested)
+- **`+` / Single Plus Icon (Positive):** Saves `feedback = "positive"`. (High-signal dev)
+- **`++` / Double Plus Icon (Extra Positive):** Saves `feedback = "extra_positive"`. (Critical updates/launches)
 
 ---
 
 ## 6. UI Component Specifications (Post Card)
 
 Every post card renders:
+
+### 6.1 Card Elements & Context Previews
 1. **Header:** Author handle and relevance score badge.
-2. **Parent Context Preview:** Small nested card showing parent post text.
+2. **Full Parent Thread Resolver:**
+   - If the post is a reply (`parentContext != null`):
+     - **Action:** The client UI component asynchronously fetches the full thread hierarchy using the public AppView thread endpoint:
+       `https://api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri={post.uri}&depth=5`
+     - **Parsing:** Retrieve the full recursive chain of `parent` post objects.
+     - **Rendering:** Render the full list of ancestor posts sequentially (from the root post down to the immediate parent post) directly above the target post card.
+     - **Thread Rules:**
+       - **Zero Truncation:** Render the **entire text** of each ancestor post. Do not cap the number of lines or append ellipses (`...`).
+       - **Visual Hierarchy:** Render thin vertical linking lines (e.g. `2px solid #334155`) connecting user avatar icons to visually display the reply indentation hierarchy.
+       - **Defaults:** Render the complete thread expanded by default so it is fully visible immediately upon viewing the post.
 3. **Post Body (Rich Text):** Parses byte offsets using `facets` to construct clickable HTML links.
 4. **Media Embed Box:**
    - **Images:** inline hotlinked thumbnail grid.

@@ -178,12 +178,7 @@ These tests verify data persistence, reliability of the outbox, and error captur
 - **Test Action:** Ingest a reply post matching keyword criteria.
 - **Assertion:**
   - The daemon catches the HTTP connection timeout exception.
-  - The daemon writes a row to the SQLite `processing_failures` table containing:
-    - `event_type = 'context_fetch'`
-    - `raw_payload = '{MOCK_JETSTREAM_POST_JSON}'`
-    - `error_message = 'AppView API request timeout: HTTP 504'`
-    - `created_at` = valid ISO-8601 UTC timestamp.
-  - Ingestion does not halt; subsequent firehose commits continue to be parsed normally.
+  - The daemon writes a row to the SQLite `processing_failures` table containing `event_type = 'context_fetch'` and `error_message = 'AppView API request timeout: HTTP 504'`.
 
 ---
 
@@ -203,7 +198,7 @@ These tests verify data persistence, reliability of the outbox, and error captur
 
 ## 7. UI, PWA & Viewport Verification
 
-These scenarios verify client-side CSS layouts, state transitions, and PWA metadata.
+These scenarios verify client-side CSS layouts, state transitions, PWA metadata, sorting consistency, counters, and thread expansion.
 
 ### 7.1 Rich Text Facet Rendering
 - **Given:** A post text `Check code at link` and a facets entry: `{ "start": 14, "end": 18, "type": "link", "uri": "https://github.com" }`.
@@ -211,20 +206,31 @@ These scenarios verify client-side CSS layouts, state transitions, and PWA metad
   - The UI text renderer outputs an HTML anchor tag wrapping "link":
     `<a href="https://github.com" target="_blank" ...>link</a>`.
 
-### 7.2 Stable Viewport Query Verification
-- **Test Action:** Load the feed. In the background, write a new post to Firestore using timestamp `matchedAt > pageLoadTime`.
+### 7.2 Stable Viewport & Score Sorting Verification
+- **Test Action:** Inspect the Firestore query executed by the feed component.
 - **Assertion:**
-  - The feed container remains stable. The new post is NOT added to the timeline automatically.
-  - The sticky banner `[ 🗘 Load 1 new posts ]` appears.
+  - The query strictly specifies order rules: `.orderBy('relevanceScore', 'desc').orderBy('matchedAt', 'desc')`.
+  - Refreshing the feed fetches posts in this identical relevance-first order.
+  - The timeline stays static; background-added posts trigger the floating sticky banner `[ 🗘 Load 1 new posts ]` instead of inserting themselves.
 
-### 7.3 Four-Tier Feedback Button Actions
-- **Test Action:** Render a post card, and click each feedback button:
-  - Click `--`: verify Firestore document updates `feedback = 'negative'`.
-  - Click `-`: verify Firestore document updates `feedback = 'neutral'`.
-  - Click `+`: verify Firestore document updates `feedback = 'positive'`.
-  - Click `++`: verify Firestore document updates `feedback = 'extra_positive'`.
+### 7.3 Real-Time Review Counter
+- **Test Action:** Monitor the unreviewed badge.
+  - Increment: Trigger ingestion daemon write of a new unreviewed post to Firestore.
+  - Decrement: Click the `+` rating button on a card.
+- **Assertion:**
+  - When the new post is written, the unreviewed badge count immediately increments by 1.
+  - When the card is rated, the unreviewed badge count immediately decrements by 1.
 
-### 7.4 Mobile Fullscreen Layout
+### 7.4 Full parent Thread conversation
+- **Test Setup:** Load a reply post card where `parentContext` is present.
+  - Mock response from `app.bsky.feed.getPostThread?uri={post.uri}` returning 3 nested ancestor posts (Grandparent, Parent, Child).
+- **Assertion:**
+  - UI triggers AppView fetch for the thread.
+  - UI renders all 3 ancestor posts in vertical order above the child post.
+  - All text content within each ancestor post is fully rendered (zero line clamping, zero string truncation).
+  - Vertical connection lines align between user avatars.
+
+### 7.5 Mobile Fullscreen Layout
 - **Test Setup:** Set browser window viewport to width `375px` (mobile portrait).
 - **Assertion:**
   - CSS query maps active stylesheet. Main body sets `overflow: hidden`, height `100dvh`.
@@ -233,7 +239,7 @@ These scenarios verify client-side CSS layouts, state transitions, and PWA metad
   - Clicking any feedback button increments `activePostIndex` to `1`, transitioning card `0` out and card `1` in.
   - Action bar does not shift height.
 
-### 7.5 PWA Asset Verification
+### 7.6 PWA Asset Verification
 - **Test Action:** Request `/manifest.json` and `/sw.js` HTTP endpoints.
 - **Assertion:**
   - `/manifest.json` returns HTTP 200 with standard JSON manifest content.
