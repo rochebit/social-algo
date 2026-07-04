@@ -15,18 +15,59 @@ const DATA_DIR = path.resolve(__dirname, "../data");
 const CURSOR_PATH = path.join(DATA_DIR, "cursor.json");
 const CURATED_DEVS_PATH = path.join(DATA_DIR, "curated_devs.json");
 
-// Define Regex pre-filters (Section 3.2)
+// Define Regex pre-filters (Section 3.3)
 const REGEX_RULES = [
+  // 3.3.1 AT Protocol & Bluesky Keywords
   { name: "keyword:atproto", regex: /\batproto\b/i },
-  { name: "keyword:bluesky dev", regex: /\bbluesky\s+dev\b/i },
-  { name: "keyword:lexicon", regex: /\blexicon\b/i },
+  { name: "keyword:bluesky", regex: /\bbluesky\s+(api|dev|sdk)\b/i },
+  { name: "keyword:lexicon", regex: /\blexicon(s)?\b/i },
   { name: "keyword:pds", regex: /\bpds\b/i },
   { name: "keyword:xrpc", regex: /\bxrpc\b/i },
   { name: "keyword:appview", regex: /\bappview\b/i },
-  { name: "keyword:did:plc", regex: /\bdid:plc:\w+\b/i },
-  { name: "keyword:at://", regex: /\bat:\/\/\w+\b/i },
-  { name: "keyword:federation", regex: /\bfederat(e|ion)\b/i },
-  { name: "keyword:self-host", regex: /\bself-host(ing|ed)?\b/i }
+  { name: "keyword:did", regex: /\bdid:(plc|web)\b/i },
+  { name: "keyword:at-uri", regex: /\bat:\/\/\S+\b/i },
+  { name: "keyword:firehose", regex: /\bfirehose\b/i },
+  { name: "keyword:jetstream", regex: /\bjetstream\b/i },
+  { name: "keyword:relay", regex: /\brelay\b/i },
+  { name: "keyword:feed-gen", regex: /\bfeed\s*gen(erator)?\b/i },
+  { name: "keyword:labeler", regex: /\blabeler\b/i },
+  { name: "keyword:ozone", regex: /\bozone\b/i },
+  { name: "keyword:data-repo", regex: /\bdata\s*repo(sitory)?\b/i },
+  { name: "keyword:nsid-namespace", regex: /\b(app\.bsky|com\.atproto)\b/i },
+  { name: "keyword:bluesky-domain", regex: /\bbsky\.(social|app)\b/i },
+
+  // 3.3.2 ActivityPub & Fediverse Keywords
+  { name: "keyword:activitypub", regex: /\bactivitypub\b/i },
+  { name: "keyword:fediverse", regex: /\bfediverse\b/i },
+  { name: "keyword:mastodon", regex: /\bmastodon\b/i },
+  { name: "keyword:webfinger", regex: /\bwebfinger\b/i },
+  { name: "keyword:activity-streams", regex: /\bactivity\s*streams\b/i },
+  { name: "keyword:nodeinfo", regex: /\bnodeinfo\b/i },
+  { name: "keyword:misskey", regex: /\bmisskey\b/i },
+  { name: "keyword:pleroma", regex: /\bpleroma\b/i },
+  { name: "keyword:lemmy", regex: /\blemmy\b/i },
+  { name: "keyword:pixelfed", regex: /\bpixelfed\b/i },
+  { name: "keyword:gotosocial", regex: /\bgotosocial\b/i },
+  { name: "keyword:akkoma", regex: /\bakkoma\b/i },
+  { name: "keyword:sharkey", regex: /\bsharkey\b/i },
+  { name: "keyword:federated-timeline", regex: /\bfederated\s+timeline\b/i },
+
+  // 3.3.3 Adjacent Protocols & Standards
+  { name: "keyword:nostr", regex: /\bnostr\b/i },
+  { name: "keyword:farcaster", regex: /\bfarcaster\b/i },
+  { name: "keyword:indieweb", regex: /\bindieweb\b/i },
+  { name: "keyword:webmention", regex: /\bwebmention\b/i },
+  { name: "keyword:solid", regex: /\bsolid\s+(protocol|pod|project)\b/i },
+  { name: "keyword:linked-data", regex: /\blinked\s*data\b/i },
+
+  // 3.3.4 General Open Social Web Keywords
+  { name: "keyword:federation", regex: /\bfederat(e|ed|ion|ing)\b/i },
+  { name: "keyword:self-host", regex: /\bself-host(ing|ed)?\b/i },
+  { name: "keyword:open-social", regex: /\bopen\s+social\b/i },
+  { name: "keyword:decentralized", regex: /\bdecentraliz(e|ed|ation|ing)\b/i },
+  { name: "keyword:social-web", regex: /\bsocial\s+(web|protocol|graph|interop)\b/i },
+  { name: "keyword:protocol-interop", regex: /\bprotocol\s+interop(erability)?\b/i },
+  { name: "keyword:social-network-protocol", regex: /\bsocial\s+network\s+(protocol|standard)\b/i }
 ];
 
 let lastSavedSeq = 0;
@@ -379,7 +420,13 @@ async function handleRepostOrLike(
         quotedContext
       });
     } else {
-      const evalResult = await evaluatePost(targetRecord.text || "", targetHandle);
+      const evalResult = await evaluatePost(
+        targetRecord.text || "",
+        targetHandle,
+        parentContext,
+        quotedContext,
+        matchRules
+      );
       if (evalResult.isRelevant) {
         await writePost({
           uri: postUri,
@@ -668,7 +715,7 @@ export async function handleCommit(msg: any, userDid: string): Promise<void> {
           // Gemini Call (Section 8.2) — wrap in try-catch for gemini_call logging
           let evalResult;
           try {
-            evalResult = await evaluatePost(record.text, handle);
+            evalResult = await evaluatePost(record.text, handle, parentContext, quotedContext, matchRules);
           } catch (err: any) {
             console.error("[Gemini Classification] Error calling Gemini API:", err);
             try {

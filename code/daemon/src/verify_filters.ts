@@ -58,6 +58,9 @@ async function runTests() {
   const deletedPostUris: string[] = [];
   let geminiCallCount = 0;
   let geminiLastEvaluatedText = "";
+  let geminiLastParentContext: any = null;
+  let geminiLastQuotedContext: any = null;
+  let geminiLastMatchRules: string[] = [];
 
   // 1. Setup Mock Handlers
   setMockDbHandlers(
@@ -69,9 +72,12 @@ async function runTests() {
     }
   );
 
-  setMockEvaluator(async (text, handle) => {
+  setMockEvaluator(async (text, handle, parentContext, quotedContext, matchRules) => {
     geminiCallCount++;
     geminiLastEvaluatedText = text;
+    geminiLastParentContext = parentContext;
+    geminiLastQuotedContext = quotedContext;
+    geminiLastMatchRules = matchRules || [];
     // Mock relevance check: if it mentions rust or appview, score 85, else score 0
     const isRelevant = text.toLowerCase().includes("rust") || text.toLowerCase().includes("appview") || text.toLowerCase().includes("coffee");
     return {
@@ -112,6 +118,9 @@ async function runTests() {
   await processOutbox();
 
   assert(geminiCallCount === 1, "Should route post to Gemini evaluation because it matches keywords 'atproto' and 'pds'");
+  assert(geminiLastMatchRules.includes("keyword:atproto") && geminiLastMatchRules.includes("keyword:pds"), "Match rules should contain keyword:atproto and keyword:pds");
+  assert(geminiLastParentContext === null, "Parent context should be null");
+  assert(geminiLastQuotedContext === null, "Quoted context should be null");
   assert(writtenPosts.length === 1, "Should write relevant post to Firestore");
   assert(writtenPosts[0].authorHandle === "did:plc:rpqw572o3uowvjscsps5u7e6", "Should fall back to author DID as handle if resolve fails");
   assert(writtenPosts[0].relevanceScore === 85, "Should store evaluation score of 85");
@@ -183,6 +192,9 @@ async function runTests() {
 
   assert(isFollowed("did:plc:vp7572o3uowvjscsps5u7e9") === true, "Author should be recognized as a follow relationship");
   assert(geminiCallCount === 1, "Should bypass regex rules and route to Gemini because author is in network graph");
+  assert(geminiLastMatchRules.includes("network:social-graph"), "Match rules should contain network:social-graph");
+  assert(geminiLastParentContext === null, "Parent context should be null");
+  assert(geminiLastQuotedContext === null, "Quoted context should be null");
   assert(writtenPosts.length === 1, "Should write evaluated post to Firestore");
 
   // ----------------------------------------------------
@@ -501,7 +513,7 @@ async function runTests() {
         })
       } as Response;
     }
-    if (url.toString().includes("getProfile") && url.toString().includes("did:plc:deva12345")) {
+    if (url.toString().includes("getProfile") && decodeURIComponent(url.toString()).includes("did:plc:deva12345")) {
       return {
         ok: true,
         json: async () => ({
@@ -544,6 +556,7 @@ async function runTests() {
   global.fetch = originalFetch;
 
   assert(geminiCallCount === 1, "Should trigger Gemini evaluation on resolved repost target post");
+  assert(geminiLastMatchRules.includes("repost:deva.bsky.social"), "Match rules should contain repost:deva.bsky.social");
   assert(writtenPosts.length === 1, "Should write relevant reposted post to outbox/Firestore");
   assert(writtenPosts[0].uri === testTargetUri, "Resolved post URI should match the repost subject");
 
@@ -588,6 +601,100 @@ async function runTests() {
   assert(parsedEmbed.type === "images", "Should parse image embed type");
   assert(parsedEmbed.images && parsedEmbed.images[0].thumbUrl === "https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:author123/bafyimgcid@jpeg", "Should construct correct thumbnail CDN URL");
   assert(parsedEmbed.images && parsedEmbed.images[0].fullsizeUrl === "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:author123/bafyimgcid@jpeg", "Should construct correct fullsize CDN URL");
+
+  // ----------------------------------------------------
+  // Section 5: Gemini Relevance Pipeline Context Integration
+  // ----------------------------------------------------
+  console.log("\nSection 5: Gemini Relevance Pipeline Context Integration...");
+
+  const parentUri = "at://did:plc:parentUser/app.bsky.feed.post/parentRkey";
+  const quotedUri = "at://did:plc:quotedUser/app.bsky.feed.post/quotedRkey";
+
+  const originalFetchContext = global.fetch;
+  global.fetch = async (url: any, init?: any) => {
+    const urlStr = url.toString();
+    const decodedUrlStr = decodeURIComponent(urlStr);
+    if (urlStr.includes("getProfile") && decodedUrlStr.includes("did:plc:parentUser")) {
+      return { ok: true, json: async () => ({ handle: "parent.handle" }) } as Response;
+    }
+    if (urlStr.includes("getProfile") && decodedUrlStr.includes("did:plc:quotedUser")) {
+      return { ok: true, json: async () => ({ handle: "quoted.handle" }) } as Response;
+    }
+    if (urlStr.includes("getProfile") && decodedUrlStr.includes("did:plc:authorWithContext")) {
+      return { ok: true, json: async () => ({ handle: "author.handle" }) } as Response;
+    }
+    if (urlStr.includes("getPosts")) {
+      if (urlStr.includes(encodeURIComponent(parentUri))) {
+        return {
+          ok: true,
+          json: async () => ({
+            posts: [{
+              uri: parentUri,
+              author: { did: "did:plc:parentUser", handle: "parent.handle" },
+              record: { text: "This is the parent post text about atproto" }
+            }]
+          })
+        } as Response;
+      }
+      if (urlStr.includes(encodeURIComponent(quotedUri))) {
+        return {
+          ok: true,
+          json: async () => ({
+            posts: [{
+              uri: quotedUri,
+              author: { did: "did:plc:quotedUser", handle: "quoted.handle" },
+              record: { text: "This is the quoted post text" }
+            }]
+          })
+        } as Response;
+      }
+    }
+    return originalFetchContext(url, init);
+  };
+
+  const contextPostEvent = {
+    did: "did:plc:authorWithContext",
+    time_us: 1715623465000000,
+    kind: "commit",
+    commit: {
+      rev: "rkeycontext",
+      operation: "create",
+      collection: "app.bsky.feed.post",
+      rkey: "rkeycontext",
+      cid: "bafycontextpost",
+      record: {
+        $type: "app.bsky.feed.post",
+        text: "Evaluating post with parent and quote contexts atproto",
+        createdAt: "2026-07-01T12:30:00.000Z",
+        reply: {
+          parent: { uri: parentUri },
+          root: { uri: parentUri }
+        },
+        embed: {
+          $type: "app.bsky.embed.record",
+          record: { uri: quotedUri }
+        }
+      }
+    }
+  };
+
+  writtenPosts.length = 0;
+  geminiCallCount = 0;
+  
+  await handleCommit(contextPostEvent, "did:plc:owner123");
+  await processOutbox();
+
+  // Restore fetch
+  global.fetch = originalFetchContext;
+
+  assert(geminiCallCount === 1, "Should trigger Gemini evaluation for post with contexts");
+  assert(geminiLastParentContext !== null, "Parent context should not be null in evaluatePost call");
+  assert(geminiLastParentContext?.authorHandle === "parent.handle", "Parent context author handle should match");
+  assert(geminiLastParentContext?.text === "This is the parent post text about atproto", "Parent context text should match");
+  assert(geminiLastQuotedContext !== null, "Quoted context should not be null in evaluatePost call");
+  assert(geminiLastQuotedContext?.authorHandle === "quoted.handle", "Quoted context author handle should match");
+  assert(geminiLastQuotedContext?.text === "This is the quoted post text", "Quoted context text should match");
+  assert(geminiLastMatchRules.includes("keyword:atproto"), "Match rules should contain keyword:atproto");
 
   // ----------------------------------------------------
   // Cleanup & Summary
