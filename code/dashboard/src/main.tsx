@@ -592,12 +592,16 @@ export function App() {
   useEffect(() => {
     // Locked dynamic viewport height & disabled scrolling on mobile (Section 4.1)
     if (isMobile) {
-      document.body.style.overflow = "hidden";
-      document.body.style.height = "100dvh";
+      document.documentElement.classList.add("mobile-active");
+      document.body.classList.add("mobile-active");
     } else {
-      document.body.style.overflow = "";
-      document.body.style.height = "";
+      document.documentElement.classList.remove("mobile-active");
+      document.body.classList.remove("mobile-active");
     }
+    return () => {
+      document.documentElement.classList.remove("mobile-active");
+      document.body.classList.remove("mobile-active");
+    };
   }, [isMobile]);
 
   const handleLogoClick = async () => {
@@ -1239,7 +1243,7 @@ export function App() {
   const activePost = posts[activePostIndex];
 
   return (
-    <>
+    <div className="app-root-wrapper">
       {renderHeader()}
 
       {/* Lightbox */}
@@ -1381,7 +1385,7 @@ export function App() {
           )}
         </main>
       )}
-    </>
+    </div>
   );
 }
 

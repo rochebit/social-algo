@@ -61,6 +61,44 @@ body, p, span, div, button, input, textarea, .post-body, .thread-text {
   flex-direction: column;
 }
 
+.app-root-wrapper {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 100vh;
+}
+
+/* Global mobile reset and root layout wrapper constraints (Section 4.1.1) */
+html.mobile-active, body.mobile-active {
+  margin: 0 !important;
+  padding: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: hidden !important;
+}
+
+html.mobile-active .app-root-wrapper {
+  display: flex !important;
+  flex-direction: column !important;
+  width: 100vw !important;
+  height: 100dvh !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+  padding-top: env(safe-area-inset-top, 16px) !important;
+}
+
+html.mobile-active header {
+  position: relative !important;
+  top: auto !important;
+}
+
+html.mobile-active .mobile-view-wrapper {
+  flex-grow: 1 !important;
+  height: auto !important;
+  padding-top: 0 !important; /* Cleared from subwrapper since parent root has it */
+}
+
+
 /* Glassmorphism Header */
 header {
   position: sticky;
