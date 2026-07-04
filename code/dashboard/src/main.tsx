@@ -603,8 +603,10 @@ export function App() {
   const handleLogoClick = async () => {
     try {
       if ("serviceWorker" in navigator) {
-        const registration = await navigator.serviceWorker.ready;
-        await registration.update();
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        for (const registration of registrations) {
+          await registration.update();
+        }
       }
     } catch (err) {
       console.warn("Service worker update failed:", err);
