@@ -95,6 +95,14 @@ These tests verify the Home Server daemon's parsing logic using mock JSON feeds.
   - 2.3.2.2. The post bypasses regex keyword checks.
   - 2.3.2.3. The post is routed directly to Gemini LLM for relevance evaluation.
 
+### 2.4 Non-English Post Discard
+* 2.4.1. **Test Setup:**
+  - 2.4.1.1. Post text: "My new atproto app is live!" (Matches keyword criteria).
+  - 2.4.1.2. Language field: `record.langs = ["ja"]` (Japanese).
+* 2.4.2. **Assertions:**
+  - 2.4.2.1. The daemon detects that the post language array is set and does not contain `"en"`.
+  - 2.4.2.2. The post is immediately discarded, and the Gemini API is **not** called.
+
 ---
 
 ## 3. Liked & Reposted Content Resolver Verification

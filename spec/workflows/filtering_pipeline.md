@@ -55,27 +55,31 @@ For every message received, the daemon checks the collection type and routes the
 
 ## 3. Stage 1: Rule-Based & Network Pre-Filtering
 
-To minimize LLM token usage and latency, posts must pass a rule-based pre-filter. A post proceeds to evaluation if it satisfies **any** of the following conditions:
+To minimize LLM token usage and latency, posts must pass a rule-based pre-filter.
 
-### 3.1 Network Graph Match (Bypass Keywords)
-* 3.1.1. **Rule:** Check if the post `authorDid` matches an entry in your local SQLite table `first_degree_follows`.
-* 3.1.2. **Outcome:** Posts matching this condition bypass keyword checks completely and proceed directly to **Section 8: Stage 2: Relevance Evaluation Flow**.
+### 3.1 Language Gate (Preliminary Check)
+* 3.1.1. **Rule:** Check the post's `langs` array (if present in the Jetstream record).
+* 3.1.2. **Condition:** If the `langs` field is set (non-empty array) and does not contain the string `"en"` (English), the post must be discarded immediately. It does not proceed to network checks, keyword matching, or Gemini evaluation.
 
-### 3.2 Keyword & Regex Matching (For General Network Posts)
+### 3.2 Network Graph Match (Bypass Keywords)
+* 3.2.1. **Rule:** Check if the post `authorDid` matches an entry in your local SQLite table `first_degree_follows`.
+* 3.2.2. **Outcome:** Posts matching this condition bypass keyword checks completely and proceed directly to **Section 8: Stage 2: Relevance Evaluation Flow** (provided they pass the Language Gate).
+
+### 3.3 Keyword & Regex Matching (For General Network Posts)
 If the author is not in your network graph, the post text must match any of the following case-insensitive regex patterns:
-* 3.2.1. `\batproto\b` (AT Protocol)
-* 3.2.2. `\bbluesky\s+dev\b` (Bluesky Dev)
-* 3.2.3. `\blexicon\b` (ATProto Lexicon definitions)
-* 3.2.4. `\bpds\b` (Personal Data Server)
-* 3.2.5. `\bxrpc\b` (ATProto RPC protocol)
-* 3.2.6. `\bappview\b` (AppView indexing)
-* 3.2.7. `\bdid:plc:\w+\b` (DIDs)
-* 3.2.8. `\bat://\w+\b` (AT URI scheme)
-* 3.2.9. `\bfederat(e|ion)\b` (Federation context)
-* 3.2.10. `\bself-host(ing|ed)?\b` (Self-hosting)
+* 3.3.1. `\batproto\b` (AT Protocol)
+* 3.3.2. `\bbluesky\s+dev\b` (Bluesky Dev)
+* 3.3.3. `\blexicon\b` (ATProto Lexicon definitions)
+* 3.3.4. `\bpds\b` (Personal Data Server)
+* 3.3.5. `\bxrpc\b` (ATProto RPC protocol)
+* 3.3.6. `\bappview\b` (AppView indexing)
+* 3.3.7. `\bdid:plc:\w+\b` (DIDs)
+* 3.3.8. `\bat://\w+\b` (AT URI scheme)
+* 3.3.9. `\bfederat(e|ion)\b` (Federation context)
+* 3.3.10. `\bself-host(ing|ed)?\b` (Self-hosting)
 
-### 3.3 Curated Whitelist Matching
-* 3.3.1. **Rule:** Check if the post `authorDid` matches an entry in the locally stored whitelist file (`curated_devs.json`), or is a reply to/repost of someone on that list.
+### 3.4 Curated Whitelist Matching
+* 3.4.1. **Rule:** Check if the post `authorDid` matches an entry in the locally stored whitelist file (`curated_devs.json`), or is a reply to/repost of someone on that list.
 
 ---
 
