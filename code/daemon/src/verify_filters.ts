@@ -444,6 +444,121 @@ async function runTests() {
   assert(failures[0].raw_payload.includes("at://did:plc:parent/app.bsky.feed.post/999"), "Raw payload should contain the reply URI");
 
   // ----------------------------------------------------
+  // Scenario 3.1: Liked & Reposted Content Resolver (Gap 8)
+  // ----------------------------------------------------
+  console.log("\nScenario 3.1: Liked & Reposted Content Resolver...");
+  
+  // Mock fetch for resolving post detail
+  const testTargetUri = "at://did:plc:creator123/app.bsky.feed.post/post123";
+  global.fetch = async (url: any, init?: any) => {
+    if (url.toString().includes("getPosts") && url.toString().includes(encodeURIComponent(testTargetUri))) {
+      return {
+        ok: true,
+        json: async () => ({
+          posts: [{
+            uri: testTargetUri,
+            cid: "bafypostcid",
+            author: {
+              did: "did:plc:creator123",
+              handle: "creator.bsky.social"
+            },
+            record: {
+              text: "Testing repost resolution in Rust",
+              createdAt: "2026-07-01T11:45:00.000Z"
+            }
+          }]
+        })
+      } as Response;
+    }
+    if (url.toString().includes("getProfile") && url.toString().includes("did:plc:deva12345")) {
+      return {
+        ok: true,
+        json: async () => ({
+          handle: "deva.bsky.social"
+        })
+      } as Response;
+    }
+    return originalFetch(url, init);
+  };
+
+  // Repost event from followed account did:plc:deva12345
+  const repostMsg = {
+    did: "did:plc:deva12345",
+    time_us: 1715623459999000,
+    kind: "commit",
+    commit: {
+      operation: "create",
+      collection: "app.bsky.feed.repost",
+      rkey: "3ksrepostrkey",
+      record: {
+        $type: "app.bsky.feed.repost",
+        subject: {
+          uri: testTargetUri,
+          cid: "bafypostcid"
+        },
+        createdAt: "2026-07-01T11:45:00.000Z"
+      }
+    }
+  };
+
+  // Add the actor to first_degree_follows so they pass the follow check
+  addFirstDegreeFollow("sync:repost-test", "did:plc:deva12345");
+
+  writtenPosts.length = 0;
+  geminiCallCount = 0;
+  await handleCommit(repostMsg, "did:plc:owner123");
+  await processOutbox();
+
+  // Restore fetch
+  global.fetch = originalFetch;
+
+  assert(geminiCallCount === 1, "Should trigger Gemini evaluation on resolved repost target post");
+  assert(writtenPosts.length === 1, "Should write relevant reposted post to outbox/Firestore");
+  assert(writtenPosts[0].uri === testTargetUri, "Resolved post URI should match the repost subject");
+
+  // ----------------------------------------------------
+  // Section 4: Context & Media Retrieval Verification (Gap 9)
+  // ----------------------------------------------------
+  console.log("\nSection 4: Context & Media Retrieval Verification...");
+  
+  // 4.2 Rich Text Facets Extraction
+  const { parseFacets, parseMediaEmbed } = require("./jetstream");
+  const mockFacetsRecord = {
+    text: "Check code at link and tag #atproto",
+    facets: [
+      {
+        index: { byteStart: 14, byteEnd: 18 },
+        features: [{ $type: "app.bsky.richtext.facet#link", uri: "https://github.com" }]
+      },
+      {
+        index: { byteStart: 27, byteEnd: 35 },
+        features: [{ $type: "app.bsky.richtext.facet#tag", tag: "atproto" }]
+      }
+    ]
+  };
+  const parsedFacets = parseFacets(mockFacetsRecord);
+  assert(parsedFacets.length === 2, "Should parse two facets");
+  assert(parsedFacets[0].type === "link" && parsedFacets[0].uri === "https://github.com", "Should correctly map link facet");
+  assert(parsedFacets[1].type === "tag" && parsedFacets[1].tag === "atproto", "Should correctly map tag facet");
+
+  // 4.3 Media Embed CDN URL Resolution
+  const mockImageEmbed = {
+    embed: {
+      $type: "app.bsky.embed.images",
+      images: [
+        {
+          image: { ref: { $link: "bafyimgcid" } },
+          alt: "test alt"
+        }
+      ]
+    }
+  };
+  const parsedEmbed = parseMediaEmbed(mockImageEmbed, "did:plc:author123");
+  assert(parsedEmbed.type === "images", "Should parse image embed type");
+  assert(parsedEmbed.images && parsedEmbed.images[0].thumbUrl === "https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:author123/bafyimgcid@jpeg", "Should construct correct thumbnail CDN URL");
+  assert(parsedEmbed.images && parsedEmbed.images[0].fullsizeUrl === "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:author123/bafyimgcid@jpeg", "Should construct correct fullsize CDN URL");
+
+  // ----------------------------------------------------
   // Cleanup & Summary
   // ----------------------------------------------------
   cleanTestDb();

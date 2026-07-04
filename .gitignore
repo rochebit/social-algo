@@ -17,6 +17,8 @@ data/
 cursor.json
 feedback_archive.jsonl
 curated_devs.json
+server_info.local
+
 
 # OS files
 .DS_Store

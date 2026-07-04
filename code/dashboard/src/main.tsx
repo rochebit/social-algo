@@ -367,6 +367,114 @@ function MediaEmbedRenderer({
 }
 
 // -----------------------------------------------------------------------
+// Parent Thread Resolver (Section 6.1.2 — Zero Truncation Rule)
+// -----------------------------------------------------------------------
+
+interface ThreadPost {
+  uri: string;
+  authorHandle: string;
+  authorDisplayName?: string;
+  authorAvatar?: string;
+  text: string;
+}
+
+function ThreadView({ postUri, fallbackParent }: { postUri: string; fallbackParent: PostContext }) {
+  const [ancestors, setAncestors] = useState<ThreadPost[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    async function fetchThread() {
+      try {
+        const res = await fetch(
+          `https://api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=${encodeURIComponent(postUri)}&depth=5`
+        );
+        if (!res.ok) throw new Error("Failed to fetch thread");
+        const data = await res.json();
+        if (active && data.thread) {
+          const list: ThreadPost[] = [];
+          let curr = data.thread.parent;
+          while (curr) {
+            if (curr.post) {
+              list.unshift({
+                uri: curr.post.uri,
+                authorHandle: curr.post.author?.handle || curr.post.author?.did || "unknown",
+                authorDisplayName: curr.post.author?.displayName,
+                authorAvatar: curr.post.author?.avatar,
+                text: curr.post.record?.text || ""
+              });
+            }
+            curr = curr.parent;
+          }
+          setAncestors(list);
+        }
+      } catch (err: any) {
+        if (active) setError(err.message || "Error");
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    fetchThread();
+    return () => {
+      active = false;
+    };
+  }, [postUri]);
+
+  if (loading) {
+    return (
+      <div className="thread-loading">
+        <span className="spinner spinner-sm" style={{ display: "inline-block", verticalAlign: "middle", marginRight: "6px" }}></span> Loading thread...
+      </div>
+    );
+  }
+
+  // Fallback to immediate parent context if AppView API fails or returns no ancestors (offline mode / mock)
+  if (error || ancestors.length === 0) {
+    return (
+      <div className="thread-container">
+        <div className="thread-node">
+          <div className="thread-avatar-container">
+            <div className="thread-avatar-placeholder">👤</div>
+            <div className="thread-line"></div>
+          </div>
+          <div className="thread-content">
+            <div className="thread-author">
+              <span className="thread-display-name">@{fallbackParent.authorHandle}</span>
+            </div>
+            <div className="thread-text">{fallbackParent.text}</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="thread-container">
+      {ancestors.map((ancestor) => (
+        <div key={ancestor.uri} className="thread-node">
+          <div className="thread-avatar-container">
+            {ancestor.authorAvatar ? (
+              <img src={ancestor.authorAvatar} alt="avatar" className="thread-avatar" />
+            ) : (
+              <div className="thread-avatar-placeholder">👤</div>
+            )}
+            <div className="thread-line"></div>
+          </div>
+          <div className="thread-content">
+            <div className="thread-author">
+              <span className="thread-display-name">{ancestor.authorDisplayName || `@${ancestor.authorHandle}`}</span>
+              {ancestor.authorDisplayName && <span className="thread-handle"> @{ancestor.authorHandle}</span>}
+            </div>
+            <div className="thread-text">{ancestor.text}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------
 // Main App Component
 // -----------------------------------------------------------------------
 
@@ -403,6 +511,7 @@ export function App() {
 
   // Mock data store
   const [mockPostsStore, setMockPostsStore] = useState<Post[]>(MOCK_DB_POSTS);
+  const [totalUnreviewed, setTotalUnreviewed] = useState<number>(0);
 
   // -----------------------------------------------------------------------
   // Responsive Handler & Scroll Lock
@@ -571,6 +680,9 @@ export function App() {
       );
       filtered.sort((a, b) => {
         if (currentRoute === "/feed") {
+          if (b.relevanceScore !== a.relevanceScore) {
+            return b.relevanceScore - a.relevanceScore;
+          }
           return new Date(b.matchedAt).getTime() - new Date(a.matchedAt).getTime();
         }
         return (
@@ -579,28 +691,44 @@ export function App() {
         );
       });
       setPosts(filtered);
+      setTotalUnreviewed(mockPostsStore.filter(p => !p.isDeleted && p.feedback === null).length);
       setIsFeedLoading(false);
       return;
     }
+
+    // Live mode unreviewed total counter listener
+    const unreviewedQ = query(
+      collection(firestoreDb, "posts"),
+      where("isDeleted", "==", false),
+      where("feedback", "==", null)
+    );
+    const unsubscribeUnreviewed = onSnapshot(unreviewedQ, (snapshot) => {
+      setTotalUnreviewed(snapshot.size);
+    });
 
     if (currentRoute === "/feed") {
       const plt = new Date().toISOString();
       pageLoadTimeRef.current = plt;
 
+      // Query posts sorted by relevance score first
       const feedQ = query(
         collection(firestoreDb, "posts"),
         where("isDeleted", "==", false),
         where("feedback", "==", null),
-        where("matchedAt", "<=", plt),
+        orderBy("relevanceScore", "desc"),
         orderBy("matchedAt", "desc"),
-        limit(50)
+        limit(100)
       );
 
       getDocs(feedQ)
         .then((snapshot) => {
           const list: Post[] = [];
           snapshot.forEach((d) => list.push({ id: d.id, ...d.data() } as Post));
-          setPosts(list);
+          // Client-side matchedTime filter to resolve Firestore constraint
+          const filteredList = list
+            .filter((p) => p.matchedAt <= plt)
+            .slice(0, 50);
+          setPosts(filteredList);
           setIsFeedLoading(false);
         })
         .catch((err) => {
@@ -617,7 +745,11 @@ export function App() {
       const unsubscribeCount = onSnapshot(countQ, (snapshot) => {
         setNewPostsCount(snapshot.size);
       });
-      return unsubscribeCount;
+      
+      return () => {
+        unsubscribeCount();
+        unsubscribeUnreviewed();
+      };
 
     } else {
       const archiveQ = query(
@@ -643,11 +775,16 @@ export function App() {
           console.error("Archive fetch error:", err);
           setIsFeedLoading(false);
         });
+
+      return () => {
+        unsubscribeUnreviewed();
+      };
     }
   }, [user, currentRoute, mockPostsStore, feedKey]);
 
   const handleLoadNewPosts = () => {
     setFeedKey((k) => k + 1);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   // -----------------------------------------------------------------------
@@ -680,12 +817,12 @@ export function App() {
             feedbackAt: now
           });
           await addDoc(collection(firestoreDb, "feedback_logs"), {
+            postId: post.id,
             postUri: post.uri,
-            postText: post.text,
             authorDid: post.authorDid,
-            relevanceScore: post.relevanceScore,
-            feedbackValue,
-            timestamp: now
+            feedback: feedbackValue,
+            submittedAt: now,
+            userEmail: user?.email || OWNER_EMAIL
           });
         } catch (err) {
           console.error("Error setting feedback:", err);
@@ -773,6 +910,9 @@ export function App() {
           <polyline points="2 12 12 17 22 12"></polyline>
         </svg>
         <h1>ATProto Feed Monitor</h1>
+        <span className="unreviewed-counter-header" title="Unreviewed posts remaining">
+          [{totalUnreviewed} posts remaining to review]
+        </span>
       </div>
       <div className="header-actions">
         {bskyUser ? (
@@ -851,12 +991,9 @@ export function App() {
           )}
         </div>
 
-        {/* Parent Context Preview (Section 4.2) */}
+        {/* Parent Context Thread Resolver (Section 6.1.2) */}
         {post.parentContext && (
-          <div className="context-card parent-context">
-            <div className="context-author">@{post.parentContext.authorHandle}</div>
-            <div className="context-text">{post.parentContext.text}</div>
-          </div>
+          <ThreadView postUri={post.uri} fallbackParent={post.parentContext} />
         )}
 
         {/* Post Body with Facet-based Rich Text (Section 4.3) */}

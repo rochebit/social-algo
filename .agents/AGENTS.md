@@ -4,3 +4,5 @@
 - **Implement Spec in Code**: Implement the specifications defined in `spec/` within the `code/` directory.
 - **Follow Spec Closely**: Follow the specifications clearly and accurately.
 - **Handle Ambiguity in Spec**: If any part of the specification is not defined well enough or is ambiguous, do not make assumptions. Inform the user and ask them to clarify/update the specification.
+- **Skip Implementation Plans**: Do not create or wait for review on implementation plans. Execute changes directly without requiring plan review.
+

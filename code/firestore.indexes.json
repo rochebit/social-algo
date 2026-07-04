@@ -6,6 +6,7 @@
       "fields": [
         { "fieldPath": "isDeleted", "order": "ASCENDING" },
         { "fieldPath": "feedback", "order": "ASCENDING" },
+        { "fieldPath": "relevanceScore", "order": "DESCENDING" },
         { "fieldPath": "matchedAt", "order": "DESCENDING" }
       ]
     },

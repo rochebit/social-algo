@@ -59,12 +59,12 @@ export interface PostDocument {
 }
 
 export interface FeedbackLogDocument {
+  postId: string;
   postUri: string;
-  postText: string;
   authorDid: string;
-  relevanceScore: number;
-  feedbackValue: string;
-  timestamp: string;
+  feedback: string;
+  submittedAt: string;
+  userEmail: string;
 }
 
 const DATA_DIR = path.resolve(__dirname, "../data");
@@ -235,12 +235,12 @@ export async function archiveFeedbackLogs(): Promise<number> {
       // 2. Append to JSONL log if not already there
       if (!archivedUris.has(data.uri)) {
         const logEntry: FeedbackLogDocument = {
+          postId: getPostId(data.uri),
           postUri: data.uri,
-          postText: data.text,
           authorDid: data.authorDid,
-          relevanceScore: data.relevanceScore,
-          feedbackValue: data.feedback || "unknown",
-          timestamp: data.feedbackAt || new Date().toISOString()
+          feedback: data.feedback || "unknown",
+          submittedAt: data.feedbackAt || new Date().toISOString(),
+          userEmail: process.env.OWNER_EMAIL || "rochebit@gmail.com"
         };
 
         writeStream.write(JSON.stringify(logEntry) + "\n");
