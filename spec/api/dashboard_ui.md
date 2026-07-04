@@ -80,21 +80,24 @@ To prevent posts from shifting or moving while reading, the feed does **not** bi
 
 ## 4. Layout & Viewport Variations (Mobile vs. Desktop)
 
-The dashboard presents different layouts depending on the user's screen width.
+The dashboard presents different layouts depending on the user's screen width, optimized for modern high-resolution displays and safe areas (e.g., Pixel 10 Pro XL).
 
 ### 4.1 Mobile Single-Post View (`@media (max-width: 639px)`)
-* 4.1.1. **Viewport Constraints:** Lock the container to `width: 100vw` and height `100dvh` (dynamic viewport height). Disable body scrolling: `overflow: hidden`.
+* 4.1.1. **Viewport Constraints:** Lock the outer container to `width: 100vw` and height `100dvh` (dynamic viewport height). Set `box-sizing: border-box` globally on all elements. Apply safe-area paddings: `padding-top: env(safe-area-inset-top, 16px)` to prevent status bar or notch overlaps.
 * 4.1.2. **Active Post State:** Maintain an integer state variable: `activePostIndex = 0`.
-* 4.1.3. **Card Rendering:** Render **only** the single post card matching `posts[activePostIndex]`. Center it on screen with 100% height and internal scrolling enabled, adding a bottom padding of `80px`.
+* 4.1.3. **Card Rendering:** Render **only** the single post card matching `posts[activePostIndex]`. Center it on screen with a dynamic viewport height layout.
+  - 4.1.3.1. **Height Calculation:** The card scroll viewport must be strictly bound to: `height: calc(100dvh - 56px - 72px - env(safe-area-inset-top, 16px) - env(safe-area-inset-bottom, 16px))` (header height is 56px, bottom bar is 72px).
+  - 4.1.3.2. **Internal Scroll:** Set `overflow-y: auto` inside the card container to gracefully support long text and deep nested threads.
+  - 4.1.3.3. **Bottom Buffer:** Include `padding-bottom: 80px` in the scrollable card box to prevent content clipping behind the fixed action bar.
 * 4.1.4. **Fixed Bottom Action Bar:** Render a sticky action bar container:
-  - 4.1.4.1. **CSS:** `position: fixed; bottom: 0; left: 0; right: 0; height: 72px; z-index: 1000; background-color: #1e293b; border-top: 1px solid #334155; display: flex; justify-content: space-around; align-items: center;`
-  - 4.1.4.2. **Stability:** Keep buttons completely stationary in the viewport regardless of the active card's content length.
+  - 4.1.4.1. **CSS:** `position: fixed; bottom: 0; left: 0; right: 0; height: calc(72px + env(safe-area-inset-bottom, 16px)); padding-bottom: env(safe-area-inset-bottom, 16px); z-index: 1000; background-color: #1e293b; border-top: 1px solid #334155; display: flex; justify-content: space-around; align-items: center;` (Ensures safe area margins clear native system swipe gestures).
+  - 4.1.4.2. **Stability:** Keep buttons completely stationary in the viewport regardless of active card text height.
   - 4.1.4.3. **Skip Button Placement:** Include a dedicated "Skip" button in this bottom action bar, visually styled to distinguish it from the feedback buttons.
 * 4.1.5. **Transition Action:** When a feedback button or the Skip button is clicked:
   - 4.1.5.1. **Feedback Click Action:** If a feedback rating is clicked, trigger the Firestore document update to set the rating.
   - 4.1.5.2. **Skip Click Action:** If the Skip button is clicked, do **not** write any feedback to Firestore (leaving the field `null` to allow later review).
   - 4.1.5.3. **Navigation:** Increment `activePostIndex = activePostIndex + 1`.
-  - 4.1.5.4. **Transition:** Trigger a CSS card-swipe slide transition.
+  - 4.1.5.4. **Transition:** Trigger a horizontal CSS card-swipe slide transition.
 
 ### 4.2 Desktop Multi-Post View (`@media (min-width: 640px)`)
 * 4.2.1. **Feed Timeline:** Render as a standard vertical feed showing multiple posts in a single scrollable viewport.
@@ -135,8 +138,9 @@ Every post card renders:
   - 6.1.2.2. **Query:** Fetch the thread hierarchy from the public AppView:
     `https://api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri={post.uri}&depth=5`
   - 6.1.2.3. **Zero Truncation Rule:** Render the **entire text** of each ancestor post in the reply chain; line clamping and ellipses are strictly prohibited.
-  - 6.1.2.4. **Visual Hierarchy:** Render thin vertical linking lines (e.g. `2px solid #334155`) connecting user avatar icons.
-  - 6.1.2.5. **Default State:** Render the complete thread expanded by default.
+  - 6.1.2.4. **Ancestor Media Resolution:** If any ancestor post contains media embeds (images, external link cards, or videos), the UI must resolve and render these assets inline directly under the ancestor post's text. Media must be styled and scaled down (e.g., 20% smaller than main post media layout) to preserve visual hierarchy.
+  - 6.1.2.5. **Visual Hierarchy:** Render thin vertical linking lines (e.g. `2px solid #334155`) connecting user avatar icons.
+  - 6.1.2.6. **Default State:** Render the complete thread expanded by default.
 * 6.1.3. **Post Body (Rich Text):** Parse byte offsets using `facets` to construct clickable HTML links.
 * 6.1.4. **Media Embed Box:**
   - 6.1.4.1. **Images:** Hotlink thumbnail grid directly from CDN.
@@ -161,14 +165,43 @@ The application configuration must bundle standard assets to support standalone 
 
 ## 8. Design Tokens & Theme Guidelines
 
-| ID | Token Category | Value | Application |
-|---|---|---|---|
-| 8.1 | **Typography** | Font Family: `Inter, sans-serif` | Applied globally to all text. |
-| 8.2 | **Theme Mode** | Dark Mode Only | Global background: `#0f172a` (Slate 900) / Text color: `#f8fafc` (Slate 50). |
-| 8.3 | **Card Styling** | Background: `#1e293b` (Slate 800) | Rounded corners: `8px`. Border: `1px solid #334155`. |
-| 8.4 | **Feed Layout** | Max-Width: `640px` (Centered) | Renders as a single-column container with `16px` gaps. |
-| 8.5 | **Active States** | Like: `#ef4444` (Red 500) | Filled heart icon when liked. |
-| 8.6 | **Active States** | Follow: `#38bdf8` (Sky 400) | Button text changes to "Following". |
+The application design must achieve a highly aesthetic, premium look. Generic elements are prohibited.
+
+### 8.1 Color System
+* 8.1.1. **Global Background:** Deep slate-to-dark gradient: `linear-gradient(135deg, #090d16 0%, #0f172a 100%)`.
+* 8.1.2. **Card Styling:** Frosted glassmorphism containers:
+  - 8.1.2.1. Background: `rgba(30, 41, 59, 0.7)`.
+  - 8.1.2.2. Backdrop Filter: `blur(16px)`.
+  - 8.1.2.3. Borders: `1px solid rgba(255, 255, 255, 0.08)`.
+  - 8.1.2.4. Shadow: `0 8px 32px rgba(0, 0, 0, 0.3)`.
+  - 8.1.2.5. Corners: `12px` rounded corners.
+* 8.1.3. **Relevance Badges:**
+  - 8.1.3.1. High Relevance (>80): Emerald gradient `linear-gradient(135deg, #059669 0%, #10b981 100%)`.
+  - 8.1.3.2. Mid Relevance (50-80): Amber gradient `linear-gradient(135deg, #d97706 0%, #f59e0b 100%)`.
+  - 8.1.3.3. Low Relevance (<50): Slate/Indigo gradient `linear-gradient(135deg, #475569 0%, #64748b 100%)`.
+* 8.1.4. **Accent & Interactive Colors:**
+  - 8.1.4.1. Primary Indigo/Violet Gradient: `#6366f1` to `#4f46e5`.
+  - 8.1.4.2. Like Active: `#ef4444` (Red 500).
+  - 8.1.4.3. Follow Active: `#38bdf8` (Sky 400).
+  - 8.1.4.4. Double-Minus: `#f97316` (Orange 500).
+  - 8.1.4.5. Minus: `#94a3b8` (Slate 400).
+  - 8.1.4.6. Plus: `#14b8a6` (Teal 500).
+  - 8.1.4.7. Double-Plus: `#3b82f6` (Blue 500).
+
+### 8.2 Typography
+* 8.2.1. **Headers and Scores:** Font Family `Outfit`, Sans-serif, Font Weight `700`, letter-spacing `-0.02em`.
+* 8.2.2. **Body Text:** Font Family `Inter`, Sans-serif, Font Weight `400`, letter-spacing `-0.011em` for optimal legibility.
+
+### 8.3 Animations & Micro-interactions
+* 8.3.1. **Button Scales:** Apply `transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1)` to all buttons. On hover, scale to `1.05`. On active click, scale to `0.95`.
+* 8.3.2. **Card Swipes (Mobile):** Horizontal transition when loading the next card: `transition: transform 0.45s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.45s ease`.
+* 8.3.3. **Refresh Banner Floating:** Floating keyframe animation translating the y-axis:
+  ```css
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+  }
+  ```
 
 ---
 

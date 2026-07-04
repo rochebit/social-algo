@@ -226,21 +226,24 @@ These scenarios verify client-side CSS layouts, state transitions, PWA metadata,
 
 ### 7.4 Full parent Thread conversation
 * 7.4.1. **Test Setup:** Load a reply post card where `parentContext` is present.
-  - 7.4.1.1. Mock response from `app.bsky.feed.getPostThread?uri={post.uri}` returning 3 nested ancestor posts (Grandparent, Parent, Child).
+  - 7.4.1.1. Mock response from `app.bsky.feed.getPostThread?uri={post.uri}` returning 3 nested ancestor posts (Grandparent, Parent, Child), with the Parent containing an image embed.
 * 7.4.2. **Assertions:**
   - 7.4.2.1. UI triggers AppView fetch for the thread.
   - 7.4.2.2. UI renders all 3 ancestor posts in vertical order above the child post.
   - 7.4.2.3. All text content within each ancestor post is fully rendered (zero line clamping, zero string truncation).
   - 7.4.2.4. Vertical connection lines align between user avatars.
+  - 7.4.2.5. The image embed in the Parent post resolves and is displayed inline below its body text, scaled down by 20% compared to main post media cards.
 
 ### 7.5 Mobile Fullscreen Layout
-* 7.5.1. **Test Setup:** Set browser window viewport to width `375px` (mobile portrait).
+* 7.5.1. **Test Setup:** Set browser window viewport sizes to simulate a Pixel 10 Pro XL (width `412px`, height `915px`), with mock system notch safe area variables (`env(safe-area-inset-top)` set to `44px` and `env(safe-area-inset-bottom)` set to `34px`).
 * 7.5.2. **Assertions:**
-  - 7.5.2.1. CSS query maps active stylesheet. Main body sets `overflow: hidden`, height `100dvh`.
-  - 7.5.2.2. Only **one** post card is rendered in the viewport (matching `posts[activePostIndex]`).
-  - 7.5.2.3. Action bar is fixed at the absolute bottom of the screen (`position: fixed; bottom: 0`).
-  - 7.5.2.4. Clicking any feedback button increments `activePostIndex` to `1`, transitioning card `0` out and card `1` in.
-  - 7.5.2.5. Action bar does not shift height.
+  - 7.5.2.1. Global styles apply `box-sizing: border-box`. Outer container disables body scrolling (`overflow: hidden`).
+  - 7.5.2.2. The active card's viewport height matches the computation: `calc(100dvh - 56px - 72px - env(safe-area-inset-top) - env(safe-area-inset-bottom))`.
+  - 7.5.2.3. The active card scroll container enables internal scrolling (`overflow-y: auto`) and defines a bottom buffer (`padding-bottom: 80px`).
+  - 7.5.2.4. The bottom action bar clears the swipe indicators: `height: calc(72px + env(safe-area-inset-bottom))` with a padding bottom of `env(safe-area-inset-bottom)`.
+  - 7.5.2.5. Only **one** post card is rendered in the viewport (matching `posts[activePostIndex]`).
+  - 7.5.2.6. Clicking any action button increments `activePostIndex` to `1`, transitioning card `0` out and card `1` in.
+  - 7.5.2.7. Action bar does not shift height or overlap content area.
 
 ### 7.6 PWA Asset Verification
 * 7.6.1. **Test Action:** Request `/manifest.json` and `/sw.js` HTTP endpoints.
