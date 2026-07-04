@@ -9,25 +9,25 @@ This document specifies the target test suite, mock payloads, and assertions req
 The following test scenarios must be verified (e.g., using the Firebase Security Rules Local Emulator Suite or production staging tests).
 
 ### 1.1 Unauthenticated Read/Write Block
-- **Test Setup:** Client SDK initialized without signing in.
-- **Test Action 1:** Attempt to read `/posts/test-id`.
-  - **Expected Result:** API returns `Permission Denied` (HTTP 403 equivalents).
-- **Test Action 2:** Attempt to write to `/posts/test-id` or `/feedback_logs/test-id`.
-  - **Expected Result:** API returns `Permission Denied`.
+* 1.1.1. **Test Setup:** Initialize the Firebase client SDK without signing in.
+* 1.1.2. **Test Action 1:** Attempt to perform a read operation on `/posts/test-id`.
+  - 1.1.2.1. **Expected Result:** The API returns `Permission Denied` (HTTP 403 equivalents).
+* 1.1.3. **Test Action 2:** Attempt to perform a write or update operation to `/posts/test-id` or `/feedback_logs/test-id`.
+  - 1.1.3.1. **Expected Result:** The API returns `Permission Denied` (HTTP 403 equivalents).
 
 ### 1.2 Non-Owner Read/Write Block
-- **Test Setup:** Client signed in via Firebase Auth with email `intruder@gmail.com` (not matching the whitelisted owner email).
-- **Test Action 1:** Attempt to read `/posts/test-id`.
-  - **Expected Result:** API returns `Permission Denied`.
-- **Test Action 2:** Attempt to write to `/posts/test-id` or `/feedback_logs/test-id`.
-  - **Expected Result:** API returns `Permission Denied`.
+* 1.2.1. **Test Setup:** Sign in via Firebase Auth with email `intruder@gmail.com` (not matching the whitelisted owner email).
+* 1.2.2. **Test Action 1:** Attempt to perform a read operation on `/posts/test-id`.
+  - 1.2.2.1. **Expected Result:** The API returns `Permission Denied`.
+* 1.2.3. **Test Action 2:** Attempt to perform a write or update operation to `/posts/test-id` or `/feedback_logs/test-id`.
+  - 1.2.3.1. **Expected Result:** The API returns `Permission Denied`.
 
 ### 1.3 Owner Read/Write Access
-- **Test Setup:** Client signed in via Firebase Auth with email matching the exact whitelist (e.g., `owner@gmail.com`).
-- **Test Action 1:** Attempt to read `/posts`.
-  - **Expected Result:** Query succeeds and returns documents.
-- **Test Action 2:** Attempt to update a post's `feedback` field.
-  - **Expected Result:** Write succeeds.
+* 1.3.1. **Test Setup:** Sign in via Firebase Auth with email matching the exact whitelist (e.g., `owner@gmail.com`).
+* 1.3.2. **Test Action 1:** Attempt to perform a read query on `/posts`.
+  - 1.3.2.1. **Expected Result:** The query succeeds and returns documents.
+* 1.3.3. **Test Action 2:** Attempt to update a post's `feedback` field.
+  - 1.3.3.1. **Expected Result:** The write operation succeeds.
 
 ---
 
@@ -36,7 +36,7 @@ The following test scenarios must be verified (e.g., using the Firebase Security
 These tests verify the Home Server daemon's parsing logic using mock JSON feeds.
 
 ### 2.1 Ingestion Parsing and Regex Matching
-- **Mock Input Event:**
+* 2.1.1. **Mock Input Event:**
   ```json
   {
     "did": "did:plc:rpqw572o3uowvjscsps5u7e6",
@@ -55,13 +55,13 @@ These tests verify the Home Server daemon's parsing logic using mock JSON feeds.
     }
   }
   ```
-- **Assertion:**
-  - Daemon parses commit correctly.
-  - Text triggers regex matches for `atproto` and `pds`.
-  - Post is routed to Stage 2 (Gemini LLM evaluation or direct Firestore write if bypass mode is active).
+* 2.1.2. **Assertions:**
+  - 2.1.2.1. The daemon parses the commit metadata correctly.
+  - 2.1.2.2. Text triggers regex matches for `atproto` and `pds`.
+  - 2.1.2.3. The post is routed to Stage 2 (Gemini LLM evaluation or direct Firestore write if bypass mode is active).
 
 ### 2.2 Off-Topic Discard
-- **Mock Input Event:**
+* 2.2.1. **Mock Input Event:**
   ```json
   {
     "did": "did:plc:rpqw572o3uowvjscsps5u7e6",
@@ -80,20 +80,20 @@ These tests verify the Home Server daemon's parsing logic using mock JSON feeds.
     }
   }
   ```
-- **Assertion:**
-  - Text triggers zero regex rules.
-  - Author DID is not in the local Network Graph (1st-degree follows) or curated whitelist.
-  - Post is immediately discarded. Gemini is **not** called.
+* 2.2.2. **Assertions:**
+  - 2.2.2.1. The post text triggers zero regex rules.
+  - 2.2.2.2. The author DID is verified not to be in the local Network Graph (1st-degree follows) or curated whitelist.
+  - 2.2.2.3. The post is immediately discarded, and the Gemini API is **not** called.
 
 ### 2.3 Network Graph Bypass (1st-Degree Follows)
-- **Mock Input Event:**
-  - Post text: "Had a great coffee this morning! #morning #cafe" (Zero keyword matches)
-  - Author DID: `did:plc:deva12345`
-  - **Graph State:** `did:plc:deva12345` is present in the `first_degree_follows` database.
-- **Assertion:**
-  - Daemon detects the author is in your 1st-degree follows.
-  - Post bypasses regex keyword checks.
-  - Post is routed directly to Gemini LLM for relevance evaluation.
+* 2.3.1. **Test Setup:**
+  - 2.3.1.1. Post text: "Had a great coffee this morning! #morning #cafe" (Zero keyword matches).
+  - 2.3.1.2. Author DID: `did:plc:deva12345`.
+  - 2.3.1.3. Graph State: `did:plc:deva12345` is populated in the local `first_degree_follows` database.
+* 2.3.2. **Assertions:**
+  - 2.3.2.1. The daemon detects the author is in your 1st-degree follows.
+  - 2.3.2.2. The post bypasses regex keyword checks.
+  - 2.3.2.3. The post is routed directly to Gemini LLM for relevance evaluation.
 
 ---
 
@@ -102,7 +102,7 @@ These tests verify the Home Server daemon's parsing logic using mock JSON feeds.
 These tests verify resolving post metadata when a followed account interacts with it.
 
 ### 3.1 Repost Sync
-- **Mock Input Event (Repost):**
+* 3.1.1. **Mock Input Event (Repost):**
   ```json
   {
     "did": "did:plc:deva12345",
@@ -123,14 +123,14 @@ These tests verify resolving post metadata when a followed account interacts wit
     }
   }
   ```
-- **Test Setup:**
-  - `did:plc:deva12345` exists in the local `first_degree_follows` table (with handle `deva.bsky.social`).
-  - Mock response from `app.bsky.feed.getPosts?uris=at://did:plc:creator/app.bsky.feed.post/post123` returns post details.
-- **Assertion:**
-  - Daemon validates that the repost actor is a followed account.
-  - Daemon successfully triggers HTTP call to resolve target post details.
-  - Resolved post payload contains `matchRules = ["repost:deva.bsky.social"]`.
-  - Resolved post bypasses keyword checks and is routed directly to Stage 2.
+* 3.1.2. **Test Setup:**
+  - 3.1.2.1. `did:plc:deva12345` exists in the local `first_degree_follows` table (with handle `deva.bsky.social`).
+  - 3.1.2.2. Mock response from `app.bsky.feed.getPosts?uris=at://did:plc:creator/app.bsky.feed.post/post123` returns post details.
+* 3.1.3. **Assertions:**
+  - 3.1.3.1. The daemon validates that the repost actor is a followed account.
+  - 3.1.3.2. The daemon successfully triggers HTTP call to resolve target post details.
+  - 3.1.3.3. The resolved post payload contains `matchRules = ["repost:deva.bsky.social"]`.
+  - 3.1.3.4. The resolved post bypasses keyword checks and is routed directly to Stage 2.
 
 ---
 
@@ -139,22 +139,22 @@ These tests verify resolving post metadata when a followed account interacts wit
 These scenarios verify the crawling and parsing of media assets, links, and replies.
 
 ### 4.1 Reply Thread Context Crawl
-- **Mock Input Event:** Post has `reply` property pointing to parent post `at://did:plc:parent/app.bsky.feed.post/999`.
-- **Test Setup:** Mock external response from `app.bsky.feed.getPosts?uris=at://did:plc:parent/app.bsky.feed.post/999` returns parent content.
-- **Assertion:**
-  - The local `posts_outbox` payload contains the `parentContext` object:
-    `{ "uri": "at://did:plc:parent...", "authorHandle": "parentuser.bsky.social", "text": "Parent post content text" }`.
+* 4.1.1. **Mock Input Event:** Post has `reply` property pointing to parent post `at://did:plc:parent/app.bsky.feed.post/999`.
+* 4.1.2. **Test Setup:** Mock external response from `app.bsky.feed.getPosts?uris=at://did:plc:parent/app.bsky.feed.post/999` returns parent content.
+* 4.1.3. **Assertion:** The local `posts_outbox` payload contains the `parentContext` object:
+  `{ "uri": "at://did:plc:parent...", "authorHandle": "parentuser.bsky.social", "text": "Parent post content text" }`.
 
 ### 4.2 Rich Text Facets Extraction
-- **Mock Input Event:** Post contains a link facet (`app.bsky.richtext.facet#link`) at bytes index `58` to `79` pointing to `https://github.com/my/repo`.
-- **Assertion:**
-  - Outbox payload includes a `facets` entry:
-    `{ "start": 58, "end": 79, "type": "link", "uri": "https://github.com/my/repo" }`.
+* 4.2.1. **Mock Input Event:** Post contains a link facet (`app.bsky.richtext.facet#link`) at bytes index `58` to `79` pointing to `https://github.com/my/repo`.
+* 4.2.2. **Assertion:** The outbox payload includes a `facets` entry:
+  `{ "start": 58, "end": 79, "type": "link", "uri": "https://github.com/my/repo" }`.
 
 ### 4.3 Media Embed CDN URL Resolution
-- **Mock Input Event (Images):** Ingest a post from author `did:plc:rpqw572o3uowvjscsps5u7e6` with an image embed containing blob reference CID `bafyimgcid`.
-- **Assertion:**
-  - Outbox payload contains the `mediaEmbed.images` structure with constructed hotlink URLs.
+* 4.3.1. **Mock Input Event (Images):** Ingest a post from author `did:plc:rpqw572o3uowvjscsps5u7e6` with an image embed containing blob reference CID `bafyimgcid`.
+* 4.3.2. **Assertions:**
+  - 4.3.2.1. Outbox payload contains the `mediaEmbed.images` structure.
+  - 4.3.2.2. The `thumbUrl` matches: `https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:rpqw572o3uowvjscsps5u7e6/bafyimgcid@jpeg`.
+  - 4.3.2.3. The `fullsizeUrl` matches: `https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:rpqw572o3uowvjscsps5u7e6/bafyimgcid@jpeg`.
 
 ---
 
@@ -163,36 +163,32 @@ These scenarios verify the crawling and parsing of media assets, links, and repl
 These tests verify data persistence, reliability of the outbox, and error capturing.
 
 ### 5.1 Outbox Insertion on Match
-- **Given:** A post passes Gemini evaluation successfully.
-- **Assertion:**
-  - A row is inserted in the SQLite `posts_outbox` table containing the correct SHA-256 `post_id` as the primary key, `action = 'write'`, the JSON document payload, and `status = 'pending'`.
+* 5.1.1. **Given:** A post passes Gemini evaluation successfully.
+* 5.1.2. **Assertion:** A row is inserted in the SQLite `posts_outbox` table containing the correct SHA-256 `post_id` as the primary key, `action = 'write'`, the JSON document payload, and `status = 'pending'`.
 
 ### 5.2 Outbox Processing under Outage (Offline Mode)
-- **Test Setup:** Disconnect the home server's internet access (mock Firestore write timeout/network failure).
-- **Test Action:** Route 3 matching posts through the filtering pipeline.
-- **Assertion:**
-  - The SQLite table `posts_outbox` successfully accumulates all 3 posts with `status = 'failed'` and their `retry_count` increments.
+* 5.2.1. **Test Setup:** Disconnect the home server's internet access (mock Firestore write timeout/network failure).
+* 5.2.2. **Test Action:** Route 3 matching posts through the filtering pipeline.
+* 5.2.3. **Assertion:** The SQLite table `posts_outbox` successfully accumulates all 3 posts with `status = 'failed'` and their `retry_count` increments.
 
 ### 5.3 Exception Logging (Processing Failures)
-- **Test Setup:** Mock an AppView API timeout error (HTTP 504) during the parent thread resolution callback.
-- **Test Action:** Ingest a reply post matching keyword criteria.
-- **Assertion:**
-  - The daemon catches the HTTP connection timeout exception.
-  - The daemon writes a row to the SQLite `processing_failures` table containing `event_type = 'context_fetch'` and `error_message = 'AppView API request timeout: HTTP 504'`.
+* 5.3.1. **Test Setup:** Mock an AppView API timeout error (HTTP 504) during the parent thread resolution callback.
+* 5.3.2. **Test Action:** Ingest a reply post matching keyword criteria.
+* 5.3.3. **Assertions:**
+  - 5.3.3.1. The daemon catches the HTTP connection timeout exception.
+  - 5.3.3.2. The daemon writes a row to the SQLite `processing_failures` table containing `event_type = 'context_fetch'` and `error_message = 'AppView API request timeout: HTTP 504'`.
 
 ---
 
 ## 6. Network Graph Sync Verification
 
 ### 6.1 New Follow (By Owner)
-- **Mock Input Event:** Creating a follow on `app.bsky.graph.follow`.
-- **Assertion:**
-  - Row `(3ks5z3followrkey, did:plc:newfriend123)` is written to `first_degree_follows`.
+* 6.1.1. **Mock Input Event:** Creating a follow on `app.bsky.graph.follow`.
+* 6.1.2. **Assertion:** Row `(3ks5z3followrkey, did:plc:newfriend123)` is written to the SQLite `first_degree_follows` table.
 
 ### 6.2 Unfollow (By Owner)
-- **Mock Input Event:** Deleting a follow on `app.bsky.graph.follow`.
-- **Assertion:**
-  - Row matching `rkey == 3ks5z3followrkey` is deleted from `first_degree_follows`.
+* 6.2.1. **Mock Input Event:** Deleting a follow on `app.bsky.graph.follow`.
+* 6.2.2. **Assertion:** Row matching `rkey == 3ks5z3followrkey` is deleted from the `first_degree_follows` table.
 
 ---
 
@@ -201,46 +197,45 @@ These tests verify data persistence, reliability of the outbox, and error captur
 These scenarios verify client-side CSS layouts, state transitions, PWA metadata, sorting consistency, counters, and thread expansion.
 
 ### 7.1 Rich Text Facet Rendering
-- **Given:** A post text `Check code at link` and a facets entry: `{ "start": 14, "end": 18, "type": "link", "uri": "https://github.com" }`.
-- **Assertion:**
-  - The UI text renderer outputs an HTML anchor tag wrapping "link":
-    `<a href="https://github.com" target="_blank" ...>link</a>`.
+* 7.1.1. **Given:** A post text `Check code at link` and a facets entry: `{ "start": 14, "end": 18, "type": "link", "uri": "https://github.com" }`.
+* 7.1.2. **Assertion:** The UI text renderer outputs an HTML anchor tag wrapping "link":
+  `<a href="https://github.com" target="_blank" ...>link</a>`.
 
 ### 7.2 Stable Viewport & Score Sorting Verification
-- **Test Action:** Inspect the Firestore query executed by the feed component.
-- **Assertion:**
-  - The query strictly specifies order rules: `.orderBy('relevanceScore', 'desc').orderBy('matchedAt', 'desc')`.
-  - Refreshing the feed fetches posts in this identical relevance-first order.
-  - The timeline stays static; background-added posts trigger the floating sticky banner `[ 🗘 Load 1 new posts ]` instead of inserting themselves.
+* 7.2.1. **Test Action:** Inspect the Firestore query executed by the feed component.
+* 7.2.2. **Assertions:**
+  - 7.2.2.1. The query strictly specifies order rules: `.orderBy('relevanceScore', 'desc').orderBy('matchedAt', 'desc')`.
+  - 7.2.2.2. Refreshing the feed fetches posts in this identical relevance-first order.
+  - 7.2.2.3. The timeline stays static; background-added posts trigger the floating sticky banner `[ 🗘 Load 1 new posts ]` instead of inserting themselves.
 
 ### 7.3 Real-Time Review Counter
-- **Test Action:** Monitor the unreviewed badge.
-  - Increment: Trigger ingestion daemon write of a new unreviewed post to Firestore.
-  - Decrement: Click the `+` rating button on a card.
-- **Assertion:**
-  - When the new post is written, the unreviewed badge count immediately increments by 1.
-  - When the card is rated, the unreviewed badge count immediately decrements by 1.
+* 7.3.1. **Test Action:** Monitor the unreviewed badge.
+  - 7.3.1.1. Increment check: Trigger ingestion daemon write of a new unreviewed post to Firestore.
+  - 7.3.1.2. Decrement check: Click the `+` rating button on a card.
+* 7.3.2. **Assertions:**
+  - 7.3.2.1. When the new post is written, the unreviewed badge count immediately increments by 1.
+  - 7.3.2.2. When the card is rated, the unreviewed badge count immediately decrements by 1.
 
 ### 7.4 Full parent Thread conversation
-- **Test Setup:** Load a reply post card where `parentContext` is present.
-  - Mock response from `app.bsky.feed.getPostThread?uri={post.uri}` returning 3 nested ancestor posts (Grandparent, Parent, Child).
-- **Assertion:**
-  - UI triggers AppView fetch for the thread.
-  - UI renders all 3 ancestor posts in vertical order above the child post.
-  - All text content within each ancestor post is fully rendered (zero line clamping, zero string truncation).
-  - Vertical connection lines align between user avatars.
+* 7.4.1. **Test Setup:** Load a reply post card where `parentContext` is present.
+  - 7.4.1.1. Mock response from `app.bsky.feed.getPostThread?uri={post.uri}` returning 3 nested ancestor posts (Grandparent, Parent, Child).
+* 7.4.2. **Assertions:**
+  - 7.4.2.1. UI triggers AppView fetch for the thread.
+  - 7.4.2.2. UI renders all 3 ancestor posts in vertical order above the child post.
+  - 7.4.2.3. All text content within each ancestor post is fully rendered (zero line clamping, zero string truncation).
+  - 7.4.2.4. Vertical connection lines align between user avatars.
 
 ### 7.5 Mobile Fullscreen Layout
-- **Test Setup:** Set browser window viewport to width `375px` (mobile portrait).
-- **Assertion:**
-  - CSS query maps active stylesheet. Main body sets `overflow: hidden`, height `100dvh`.
-  - Only **one** post card is rendered in the viewport (matching `posts[activePostIndex]`).
-  - Action bar is fixed at the absolute bottom of the screen (`position: fixed; bottom: 0`).
-  - Clicking any feedback button increments `activePostIndex` to `1`, transitioning card `0` out and card `1` in.
-  - Action bar does not shift height.
+* 7.5.1. **Test Setup:** Set browser window viewport to width `375px` (mobile portrait).
+* 7.5.2. **Assertions:**
+  - 7.5.2.1. CSS query maps active stylesheet. Main body sets `overflow: hidden`, height `100dvh`.
+  - 7.5.2.2. Only **one** post card is rendered in the viewport (matching `posts[activePostIndex]`).
+  - 7.5.2.3. Action bar is fixed at the absolute bottom of the screen (`position: fixed; bottom: 0`).
+  - 7.5.2.4. Clicking any feedback button increments `activePostIndex` to `1`, transitioning card `0` out and card `1` in.
+  - 7.5.2.5. Action bar does not shift height.
 
 ### 7.6 PWA Asset Verification
-- **Test Action:** Request `/manifest.json` and `/sw.js` HTTP endpoints.
-- **Assertion:**
-  - `/manifest.json` returns HTTP 200 with standard JSON manifest content.
-  - Page index contains `<meta name="apple-mobile-web-app-capable" content="yes">`.
+* 7.6.1. **Test Action:** Request `/manifest.json` and `/sw.js` HTTP endpoints.
+* 7.6.2. **Assertions:**
+  - 7.6.2.1. `/manifest.json` returns HTTP 200 with standard JSON manifest content.
+  - 7.6.2.2. Page index contains `<meta name="apple-mobile-web-app-capable" content="yes">`.

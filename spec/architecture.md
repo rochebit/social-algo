@@ -58,46 +58,52 @@ graph TB
     DashboardApp -- Open Post for Reply --> BlueskyApp
 ```
 
-### Components
+### 1.1 Components
 
-1. **Ingestion & Filtering Daemon (Home Server):**
-   - A background service (Go/Rust/Node.js) running 24/7 on the home server.
-   - Subscribes to real-time posts (`post`), follows (`follow`), reposts (`repost`), and likes (`like`) from Jetstream.
-   - Filters posts matching keyword rules or written/interacted with (reposted or liked) by your 1st-degree follows.
-   - Monitors Jetstream for record deletion events and soft-deletes the corresponding Firestore documents.
-2. **Local Database (Home Server):**
-   - A local SQLite database (`network_graph.db`) managed by the daemon.
-   - Maintains a list of your 1st-degree follows (people you follow) mapping RKeys to DIDs.
-   - Contains a **`posts_outbox`** queue table to temporarily buffer matched posts until they are successfully written to Firestore.
-3. **Outbox Sync Worker (Home Server):**
-   - Monitors the local `posts_outbox` and pushes entries to Firestore using exponential backoff retry.
-4. **Cloud Firestore (Firebase):**
-   - The central synchronization database storing matched posts and user feedback logs.
-5. **Firebase Hosting & Web Dashboard (Client Browser):**
-   - A PWA-enabled Single-Page Application (SPA) hosted on Firebase allowing user login, feed display, likes, and follows.
-6. **Firebase Authentication:**
-   - Handles Google login to restrict dashboard access to the whitelisted owner.
+1.1.1. **Ingestion & Filtering Daemon (Home Server):**
+* 1.1.1.1. Run as a background service (Go/Rust/Node.js) operating 24/7 on the home server.
+* 1.1.1.2. Subscribe to real-time posts (`post`), follows (`follow`), reposts (`repost`), and likes (`like`) from Jetstream.
+* 1.1.1.3. Filter posts matching keyword rules or written/interacted with (reposted or liked) by your 1st-degree follows.
+* 1.1.1.4. Monitor Jetstream for record deletion events and soft-delete the corresponding Firestore documents.
+
+1.1.2. **Local Database (Home Server):**
+* 1.1.2.1. Manage local state using a local SQLite database (`network_graph.db`).
+* 1.1.2.2. Maintain a list of 1st-degree follows mapping RKeys to DIDs.
+* 1.1.2.3. Queue matched posts in a **`posts_outbox`** table until they are successfully written to Firestore.
+
+1.1.3. **Outbox Sync Worker (Home Server):**
+* 1.1.3.1. Monitor the local `posts_outbox` queue.
+* 1.1.3.2. Push entries to Cloud Firestore using an exponential backoff retry mechanism.
+
+1.1.4. **Cloud Firestore (Firebase):**
+* 1.1.4.1. Act as the central synchronization database storing matched posts and user feedback logs.
+
+1.1.5. **Firebase Hosting & Web Dashboard (Client Browser):**
+* 1.1.5.1. Serve a PWA-enabled Single-Page Application (SPA) hosted on Firebase.
+* 1.1.5.2. Provide interfaces for user authentication, feed rendering, custom interaction buttons, and feedback logging.
+
+1.1.6. **Firebase Authentication:**
+* 1.1.6.1. Handle Google Login to restrict dashboard access.
 
 ---
 
 ## 2. Security Boundaries & Authentication
 
-### Network Security
-- **No Inbound Port Forwarding:** The home server daemon acts solely as a client. It establishes outbound WebSocket connections to Jetstream and outbound HTTP/WebSocket connections to Cloud Firestore. This completely protects the home network from external scans and attacks.
+### 2.1 Network Security
+* 2.1.1. **No Inbound Port Forwarding:** The home server daemon acts solely as a client. It establishes outbound WebSocket connections to Jetstream and outbound HTTP/WebSocket connections to Cloud Firestore. This completely protects the home network from external scans and attacks.
 
-### Dashboard Access Security (Firebase Auth)
-- To restrict dashboard access to you alone:
-  - **Firebase Authentication:** Configured with Google Sign-In.
-  - **Firestore Security Rules:** Hardcoded constraint validating that the authenticated user's email (`request.auth.token.email`) matches your designated email address.
-  - All unauthorized sign-ins are blocked from reading or writing any documents.
+### 2.2 Dashboard Access Security (Firebase Auth)
+* 2.2.1. **Google Sign-In:** Authenticate users via Google Sign-In.
+* 2.2.2. **Email Whitelist Verification:** Use Firestore Security Rules to validate that the authenticated user's email (`request.auth.token.email`) matches your designated email address.
+* 2.2.3. **Unauthorized Block:** Reject all read/write attempts from unauthenticated or non-whitelisted users.
 
-### ATProto OAuth (Client-Side Engagement)
+### 2.3 ATProto OAuth (Client-Side Engagement)
 Instead of storing your Bluesky app password on a server, the dashboard uses client-side ATProto OAuth to securely authorize direct actions.
-1. **Client Metadata:** The frontend hosts a `client-metadata.json` file on its Firebase Hosting origin declaring its client identity, redirect URIs, and requested scopes.
-2. **Authentication Flow:** When you click "Connect Bluesky Account", the web app redirects you to your PDS (e.g., `bsky.social`) where you authorize the client app.
-3. **Token Management:** The PDS redirects back to the dashboard with an authorization code. The web app exchanges this for `access_token` and `refresh_token` payloads and stores them locally in browser memory/LocalStorage.
-4. **Direct Actions (Likes & Follows):** When you click "Like" or "Follow" in the dashboard, the browser app crafts the XRPC request and sends it directly to your PDS using the stored OAuth access token.
-5. **Indirect Actions (Replies):** Since replies are disabled in-app to simplify thread management, the UI provides a button linking to `https://bsky.app/profile/{authorDid}/post/{rkey}` to let you comment natively.
+* 2.3.1. **Client Metadata:** The frontend hosts a `client-metadata.json` file on its Firebase Hosting origin declaring its client identity, redirect URIs, and requested scopes.
+* 2.3.2. **Authentication Flow:** When you click "Connect Bluesky Account", the web app redirects you to your PDS (e.g., `bsky.social`) where you authorize the client app.
+* 2.3.3. **Token Management:** The PDS redirects back to the dashboard with an authorization code. The web app exchanges this for `access_token` and `refresh_token` payloads and stores them locally in browser memory/LocalStorage.
+* 2.3.4. **Direct Actions (Likes & Follows):** When you click "Like" or "Follow" in the dashboard, the browser app crafts the XRPC request and sends it directly to your PDS using the stored OAuth access token.
+* 2.3.5. **Indirect Actions (Replies):** Since replies are disabled in-app to simplify thread management, the UI provides a button linking to `https://bsky.app/profile/{authorDid}/post/{rkey}` to let you comment natively.
 
 ---
 
@@ -105,12 +111,12 @@ Instead of storing your Bluesky app password on a server, the dashboard uses cli
 
 The following table outlines what data is synchronized between the Home Server, Firestore, and the Browser:
 
-| Data Entity | Primary Source | Writer(s) | Reader(s) | Sync Mechanism |
-|---|---|---|---|---|
-| **Filtered Posts** | Home Server Daemon | Home Server Daemon | Web Dashboard | Daemon writes to local outbox; sync worker pushes to Firestore; Dashboard uses real-time snapshot listener. |
-| **Thumbs Up/Down Feedback** | Web Dashboard | Web Dashboard | Home Server Daemon | Dashboard writes to a sub-collection; Daemon reads periodically or via snapshot listener. |
-| **OAuth Credentials** | User's PDS | Web Dashboard | User's PDS | Stored in client browser LocalStorage only. Never sent to the Home Server or Firestore. |
-| **Filtering Rules & Graph** | Home Server DB/Config | Home Server Daemon / Config File | Home Server Daemon | Stored locally on the Home Server. |
+| ID | Data Entity | Primary Source | Writer(s) | Reader(s) | Sync Mechanism |
+|---|---|---|---|---|---|
+| 3.1 | **Filtered Posts** | Home Server Daemon | Home Server Daemon | Web Dashboard | Daemon writes to local outbox; sync worker pushes to Firestore; Dashboard uses real-time snapshot listener. |
+| 3.2 | **Thumbs Up/Down Feedback** | Web Dashboard | Web Dashboard | Home Server Daemon | Dashboard writes to a sub-collection; Daemon reads periodically or via snapshot listener. |
+| 3.3 | **OAuth Credentials** | User's PDS | Web Dashboard | User's PDS | Stored in client browser LocalStorage only. Never sent to the Home Server or Firestore. |
+| 3.4 | **Filtering Rules & Graph** | Home Server DB/Config | Home Server Daemon / Config File | Home Server Daemon | Stored locally on the Home Server. |
 
 ---
 
