@@ -586,6 +586,7 @@ export function App() {
 
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
   const [backendStats, setBackendStats] = useState<BackendStats | null>(null);
+  const [isStatusModalOpen, setIsStatusModalOpen] = useState<boolean>(false);
 
   // Mock data store
   const [mockPostsStore, setMockPostsStore] = useState<Post[]>(MOCK_DB_POSTS);
@@ -618,6 +619,20 @@ export function App() {
       document.body.classList.remove("mobile-active");
     };
   }, [isMobile]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setIsStatusModalOpen(false);
+      }
+    };
+    if (isStatusModalOpen) {
+      window.addEventListener("keydown", handleKeyDown);
+    }
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isStatusModalOpen]);
 
   const handleLogoClick = async () => {
     try {
@@ -1098,7 +1113,13 @@ export function App() {
             <line x1="3" y1="18" x2="21" y2="18"></line>
           </svg>
         </button>
-        <div id="backend-status-dot" className={`status-dot ${status.color}`} title={status.tooltip} />
+        <div 
+          id="backend-status-dot" 
+          className={`status-dot ${status.color}`} 
+          title={status.tooltip} 
+          onClick={() => setIsStatusModalOpen(true)}
+          style={{ cursor: "pointer" }}
+        />
       </header>
     );
   };
@@ -1301,12 +1322,85 @@ export function App() {
     );
   }
 
+  const renderStatusModal = () => {
+    if (!isStatusModalOpen) return null;
+    const stats = backendStats || {
+      lastActive: new Date().toISOString(),
+      lastBatchTime: new Date().toISOString(),
+      queueSize: 0,
+      geminiFailureCount24h: 0,
+      lastBatchProcessedCount: 0,
+      lastBatchSuccessCount: 0,
+      lastBatchRelevantCount: 0,
+      lastError: null,
+      backendStatus: "online"
+    };
+
+    const status = getBackendStatus(stats);
+    const lastActiveStr = stats.lastActive ? `${stats.lastActive} (${getRelativeTime(stats.lastActive)})` : "N/A";
+    const lastBatchTimeStr = stats.lastBatchTime ? stats.lastBatchTime : "N/A";
+
+    return (
+      <>
+        <div id="modal-backdrop" onClick={() => setIsStatusModalOpen(false)} />
+        <div id="backend-status-modal">
+          <button className="modal-close-btn" onClick={() => setIsStatusModalOpen(false)} title="Close modal">✕</button>
+          
+          <div className="modal-header">
+            <h3>Backend Status: <span className={`status-text ${status.color}`}>{status.label.toUpperCase()}</span></h3>
+            <div className={`status-dot ${status.color}`} style={{ width: "12px", height: "12px", border: "none" }} />
+          </div>
+
+          <div className="modal-body">
+            <div className="metric-row">
+              <span className="metric-label">Active Heartbeat:</span>
+              <span className="metric-value">{lastActiveStr}</span>
+            </div>
+            <div className="metric-row">
+              <span className="metric-label">Queue Status:</span>
+              <span className="metric-value">Queue Backlog: {stats.queueSize} posts pending evaluation in SQLite</span>
+            </div>
+            <div className="metric-row">
+              <span className="metric-label">Gemini Failures (24h):</span>
+              <span className="metric-value">Gemini API Failures (24h): {stats.geminiFailureCount24h}</span>
+            </div>
+            <div className="metric-row">
+              <span className="metric-label">Last Batch Telemetry:</span>
+              <span className="metric-value">
+                Last Batch Run: Completed at {lastBatchTimeStr}. Selected {stats.lastBatchProcessedCount} posts. Classified {stats.lastBatchSuccessCount} successfully, finding {stats.lastBatchRelevantCount} relevant posts.
+              </span>
+            </div>
+
+            {stats.lastError && (
+              <div className="error-alert-card">
+                <div className="error-alert-header">
+                  <span>Recent Error Alert:</span>
+                  <button 
+                    className="btn-copy-error" 
+                    onClick={() => {
+                      navigator.clipboard.writeText(stats.lastError || "");
+                      alert("Error copied to clipboard!");
+                    }}
+                  >
+                    Copy Error
+                  </button>
+                </div>
+                <pre className="error-pre">{stats.lastError}</pre>
+              </div>
+            )}
+          </div>
+        </div>
+      </>
+    );
+  };
+
   // Active Post for mobile single card rendering
   const activePost = posts[activePostIndex];
 
   return (
     <div className="app-root-wrapper">
       {renderHeader()}
+      {renderStatusModal()}
 
       {/* Drawer Backdrop Overlay */}
       {isDrawerOpen && (

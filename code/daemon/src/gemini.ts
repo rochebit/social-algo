@@ -12,14 +12,29 @@ export interface PostContext {
   text: string;
 }
 
-const SYSTEM_INSTRUCTIONS = `You are a relevance filter for an open social web developer feed. Your job is to evaluate social media posts and determine whether they are worth surfacing to a software engineer who is active in the AT Protocol (atproto) and ActivityPub developer ecosystems and works at Google.
+export interface BatchEvaluationRequest {
+  uri: string;
+  text: string;
+  parentContext: PostContext | null;
+  quotedContext: PostContext | null;
+  capturePath: string[];
+}
+
+export interface BatchEvaluationResult {
+  uri: string;
+  isRelevant: boolean;
+  score: number;
+  reasoning: string;
+}
+
+const SYSTEM_INSTRUCTIONS = `You are a relevance filter for an open social web developer feed. Your job is to evaluate a batch of social media posts and determine whether they are worth surfacing to a software engineer who is active in the AT Protocol (atproto) and ActivityPub developer ecosystems and works at Google.
 
 The engineer wants to:
 - Stay current on technical developments across atproto, ActivityPub, the fediverse, and the broader open/decentralized social web.
 - Find posts worth reading for learning or situational awareness.
 - Find posts with a natural opening to reply — such as technical questions, proposals, pain points, or discussions — where a knowledgeable response would be valuable and help build their reputation in the community.
 
-Evaluate the post based on these criteria:
+Evaluate each post in the input batch based on these criteria:
 
 HIGH RELEVANCE (score 80-100):
 - Someone asking a technical question about atproto, ActivityPub, PDS hosting, Lexicon design, feed generators, federation, or related protocol internals.
@@ -48,35 +63,12 @@ IRRELEVANT (score 0-19, mark isRelevant = false):
 - Culture war or political content that tangentially references decentralized social media.
 
 IMPORTANT RULES:
-- Evaluate the post on its own content merit. Do not factor in who the author is.
+- Evaluate each post on its own content merit. Do not factor in who the author is.
 - If parent or quoted post context is provided, use it to better understand the conversation. A reply that seems vague on its own may be highly relevant in the context of a technical thread.
 - A post routed via a like or repost from someone the engineer follows has already passed a social signal check; still evaluate it on content merit but recognize it reached the pipeline through trusted network activity.
 - When scoring, give higher weight to posts where there is a clear opportunity to respond and add value versus posts that are just interesting to read.
-- Be concise in your reasoning (1-2 sentences).`;
-
-export function constructUserPrompt(
-  postText: string,
-  parentContext: PostContext | null,
-  quotedContext: PostContext | null,
-  matchRules: string[]
-): string {
-  let prompt = `Evaluate this post for relevance:
-
---- POST ---
-${postText}
---- END POST ---`;
-
-  if (parentContext) {
-    prompt += `\n\n--- PARENT POST (this post is a reply to) ---\nAuthor: ${parentContext.authorHandle}\n${parentContext.text}\n--- END PARENT POST ---`;
-  }
-
-  if (quotedContext) {
-    prompt += `\n\n--- QUOTED POST (this post is quoting) ---\nAuthor: ${quotedContext.authorHandle}\n${quotedContext.text}\n--- END QUOTED POST ---`;
-  }
-
-  prompt += `\n\nCapture path: ${matchRules.join(", ")}`;
-  return prompt;
-}
+- Be concise in your reasoning (1-2 sentences).
+- You must return a JSON array containing an evaluation object for every post in the input batch, maintaining the correct URI for each.`;
 
 let aiClient: GoogleGenAI | null = null;
 let mockEvaluator: (
@@ -108,19 +100,31 @@ function getAiClient(): GoogleGenAI {
   return aiClient;
 }
 
-export async function evaluatePost(
-  text: string,
-  authorHandle: string,
-  parentContext: PostContext | null = null,
-  quotedContext: PostContext | null = null,
-  matchRules: string[] = []
-): Promise<EvaluationResult> {
+export async function evaluatePostsBatch(
+  posts: BatchEvaluationRequest[]
+): Promise<BatchEvaluationResult[]> {
   if (mockEvaluator) {
-    return mockEvaluator(text, authorHandle, parentContext, quotedContext, matchRules);
+    const results: BatchEvaluationResult[] = [];
+    for (const post of posts) {
+      const singleRes = await mockEvaluator(
+        post.text,
+        "",
+        post.parentContext,
+        post.quotedContext,
+        post.capturePath
+      );
+      results.push({
+        uri: post.uri,
+        isRelevant: singleRes.isRelevant,
+        score: singleRes.score,
+        reasoning: singleRes.reasoning
+      });
+    }
+    return results;
   }
-  const ai = getAiClient();
 
-  const prompt = constructUserPrompt(text, parentContext, quotedContext, matchRules);
+  const ai = getAiClient();
+  const prompt = JSON.stringify(posts);
 
   try {
     const modelName = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite";
@@ -132,13 +136,17 @@ export async function evaluatePost(
         temperature: 0.1,
         responseMimeType: "application/json",
         responseSchema: {
-          type: "OBJECT",
-          properties: {
-            isRelevant: { type: "BOOLEAN" },
-            score: { type: "INTEGER" },
-            reasoning: { type: "STRING" }
-          },
-          required: ["isRelevant", "score", "reasoning"]
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              uri: { type: "STRING" },
+              isRelevant: { type: "BOOLEAN" },
+              score: { type: "INTEGER" },
+              reasoning: { type: "STRING" }
+            },
+            required: ["uri", "isRelevant", "score", "reasoning"]
+          }
         }
       }
     });
@@ -148,14 +156,37 @@ export async function evaluatePost(
       throw new Error("Empty response from Gemini model.");
     }
 
-    const result = JSON.parse(textResult) as EvaluationResult;
-    return {
+    const results = JSON.parse(textResult) as BatchEvaluationResult[];
+    return results.map((result) => ({
+      uri: result.uri || "",
       isRelevant: !!result.isRelevant,
       score: typeof result.score === "number" ? result.score : 0,
       reasoning: result.reasoning || ""
-    };
+    }));
   } catch (error: any) {
-    console.error("Gemini evaluation error:", error);
+    console.error("Gemini batch evaluation error:", error);
     throw error;
   }
+}
+
+// Keep single evaluatePost for backward compatibility / tests if needed
+export async function evaluatePost(
+  text: string,
+  authorHandle: string,
+  parentContext: PostContext | null = null,
+  quotedContext: PostContext | null = null,
+  matchRules: string[] = []
+): Promise<EvaluationResult> {
+  const batchRes = await evaluatePostsBatch([{
+    uri: "dummy-uri",
+    text,
+    parentContext,
+    quotedContext,
+    capturePath: matchRules
+  }]);
+  return {
+    isRelevant: batchRes[0].isRelevant,
+    score: batchRes[0].score,
+    reasoning: batchRes[0].reasoning
+  };
 }

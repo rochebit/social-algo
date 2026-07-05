@@ -7,7 +7,7 @@ import {
   getLastProcessingError,
   logProcessingFailure
 } from "./db";
-import { evaluatePost, isMockEvaluatorActive } from "./gemini";
+import { evaluatePostsBatch, BatchEvaluationRequest, isMockEvaluatorActive } from "./gemini";
 import { writePost, publishStats } from "./firestore";
 import { resolveParentContext, resolveQuotedContext } from "./jetstream";
 
@@ -39,109 +39,121 @@ export async function runBatchEvaluation(): Promise<void> {
 
   try {
     const batch = getEvaluationQueueBatch(BATCH_EVAL_CAP);
-    processedCount = batch.length;
+    if (batch.length === 0) {
+      return;
+    }
 
-    if (batch.length > 0) {
-      for (const item of batch) {
-        // Construct mock record for resolveParentContext and resolveQuotedContext
-        const mockRecord = {
-          reply: item.reply ? JSON.parse(item.reply) : undefined,
-          embed: item.embed ? JSON.parse(item.embed) : undefined
-        };
+    const evaluationRequests: BatchEvaluationRequest[] = [];
+    const postsMap = new Map<string, typeof batch[0]>();
+    const contextsMap = new Map<string, { parentContext: any; quotedContext: any }>();
 
-        let parentContext = null;
-        let quotedContext = null;
+    // 1. Resolve Contexts for all posts
+    for (const item of batch) {
+      postsMap.set(item.uri, item);
+      const mockRecord = {
+        reply: item.reply ? JSON.parse(item.reply) : undefined,
+        embed: item.embed ? JSON.parse(item.embed) : undefined
+      };
 
-        // 1. Resolve Contexts
-        try {
-          parentContext = await resolveParentContext(mockRecord);
-          quotedContext = await resolveQuotedContext(mockRecord);
-        } catch (err: any) {
-          console.error(`[Batch Worker] Error fetching context for post ${item.uri}:`, err);
+      let parentContext = null;
+      let quotedContext = null;
+
+      try {
+        parentContext = await resolveParentContext(mockRecord);
+        quotedContext = await resolveQuotedContext(mockRecord);
+        
+        contextsMap.set(item.uri, { parentContext, quotedContext });
+        evaluationRequests.push({
+          uri: item.uri,
+          text: item.text,
+          parentContext,
+          quotedContext,
+          capturePath: JSON.parse(item.match_rules)
+        });
+      } catch (err: any) {
+        console.error(`[Batch Worker] Error fetching context for post ${item.uri}:`, err);
+        
+        // Increment retry count
+        incrementEvaluationQueueRetry(item.uri);
+        const currentRetryCount = item.retry_count + 1;
+
+        if (currentRetryCount > 3) {
+          logProcessingFailure("context_fetch", JSON.stringify({ uri: item.uri, cid: item.cid, reply: item.reply ? JSON.parse(item.reply) : undefined, embed: item.embed ? JSON.parse(item.embed) : undefined }), err.message || String(err));
+          deleteFromEvaluationQueue(item.uri);
+        }
+      }
+    }
+
+    processedCount = evaluationRequests.length;
+    if (evaluationRequests.length === 0) {
+      return;
+    }
+
+    // 2. Single API Evaluation Call
+    let batchResults;
+    try {
+      batchResults = await evaluatePostsBatch(evaluationRequests);
+    } catch (err: any) {
+      console.error("[Batch Worker] Error in batch Gemini API call:", err);
+
+      // Batch Error & Retry Handling
+      for (const req of evaluationRequests) {
+        const item = postsMap.get(req.uri)!;
+        incrementEvaluationQueueRetry(item.uri);
+        const currentRetryCount = item.retry_count + 1;
+
+        if (currentRetryCount > 3) {
+          logProcessingFailure("gemini_call", JSON.stringify({ uri: item.uri, cid: item.cid, reply: item.reply ? JSON.parse(item.reply) : undefined, embed: item.embed ? JSON.parse(item.embed) : undefined }), err.message || String(err));
+          deleteFromEvaluationQueue(item.uri);
+        }
+      }
+      return;
+    }
+
+    // 3. Outcome Routing
+    for (const result of batchResults) {
+      const item = postsMap.get(result.uri);
+      if (!item) continue;
+
+      const contexts = contextsMap.get(result.uri);
+      const parentContext = contexts ? contexts.parentContext : null;
+      const quotedContext = contexts ? contexts.quotedContext : null;
+
+      try {
+        console.log(`[Batch Worker] Evaluated post by @${item.author_handle}: isRelevant=${result.isRelevant}, score=${result.score}, explanation="${result.reasoning.substring(0, 80)}"`);
+        successCount++;
+        if (result.isRelevant) {
+          relevantCount++;
           
-          // Increment retry count
-          incrementEvaluationQueueRetry(item.uri);
-          const currentRetryCount = item.retry_count + 1; // plus the one we just incremented
-
-          if (currentRetryCount > 3) {
-            logProcessingFailure("context_fetch", JSON.stringify({ uri: item.uri, cid: item.cid, reply: item.reply ? JSON.parse(item.reply) : undefined, embed: item.embed ? JSON.parse(item.embed) : undefined }), err.message || String(err));
-            deleteFromEvaluationQueue(item.uri);
-          }
-          continue; // Go to next post in batch
-        }
-
-        // 2. Evaluate Post
-        let evalResult;
-        try {
+          const facetsParsed = JSON.parse(item.facets || "[]");
+          const mediaEmbedParsed = JSON.parse(item.media_embed || "{}");
           const matchRulesParsed = JSON.parse(item.match_rules);
-          evalResult = await evaluatePost(
-            item.text,
-            item.author_handle,
+
+          await writePost({
+            uri: item.uri,
+            cid: item.cid,
+            authorDid: item.author_did,
+            authorHandle: item.author_handle,
+            text: item.text,
+            createdAt: item.created_at,
+            matchedAt: item.matched_at,
+            relevanceScore: result.score,
+            relevanceExplanation: result.reasoning,
+            matchRules: matchRulesParsed,
+            isDeleted: false,
+            facets: facetsParsed,
+            mediaEmbed: mediaEmbedParsed,
             parentContext,
-            quotedContext,
-            matchRulesParsed
-          );
-        } catch (err: any) {
-          console.error(`[Batch Worker] Error calling Gemini API for post ${item.uri}:`, err);
-
-          // Increment retry count
-          incrementEvaluationQueueRetry(item.uri);
-          const currentRetryCount = item.retry_count + 1; // plus the one we just incremented
-
-          if (currentRetryCount > 3) {
-            logProcessingFailure("gemini_call", JSON.stringify({ uri: item.uri, cid: item.cid, reply: item.reply ? JSON.parse(item.reply) : undefined, embed: item.embed ? JSON.parse(item.embed) : undefined }), err.message || String(err));
-            deleteFromEvaluationQueue(item.uri);
-          }
-
-          // Delay for 4.2 seconds to respect free tier rate limit (max 15 RPM)
-          if (process.env.NODE_ENV !== "test" && !isMockEvaluatorActive()) {
-            await new Promise((resolve) => setTimeout(resolve, 4200));
-          }
-          continue; // Go to next post in batch
+            quotedContext
+          });
         }
 
-        // 3. Outcome Routing
-        try {
-          console.log(`[Batch Worker] Evaluated post by @${item.author_handle}: isRelevant=${evalResult.isRelevant}, score=${evalResult.score}, explanation="${evalResult.reasoning.substring(0, 80)}"`);
-          successCount++;
-          if (evalResult.isRelevant) {
-            relevantCount++;
-            
-            const facetsParsed = JSON.parse(item.facets || "[]");
-            const mediaEmbedParsed = JSON.parse(item.media_embed || "{}");
-            const matchRulesParsed = JSON.parse(item.match_rules);
-
-            await writePost({
-              uri: item.uri,
-              cid: item.cid,
-              authorDid: item.author_did,
-              authorHandle: item.author_handle,
-              text: item.text,
-              createdAt: item.created_at,
-              matchedAt: item.matched_at,
-              relevanceScore: evalResult.score,
-              relevanceExplanation: evalResult.reasoning,
-              matchRules: matchRulesParsed,
-              isDeleted: false,
-              facets: facetsParsed,
-              mediaEmbed: mediaEmbedParsed,
-              parentContext,
-              quotedContext
-            });
-          }
-
-          // Successfully processed (either relevant or irrelevant)
-          deleteFromEvaluationQueue(item.uri);
-        } catch (err: any) {
-          console.error(`[Batch Worker] Error writing evaluated post to outbox/Firestore:`, err);
-          // Delete it so it's not stuck
-          deleteFromEvaluationQueue(item.uri);
-        }
-
-        // Delay for 4.2 seconds to respect free tier rate limit (max 15 RPM)
-        if (process.env.NODE_ENV !== "test" && !isMockEvaluatorActive()) {
-          await new Promise((resolve) => setTimeout(resolve, 4200));
-        }
+        // Successfully processed (either relevant or irrelevant)
+        deleteFromEvaluationQueue(item.uri);
+      } catch (err: any) {
+        console.error(`[Batch Worker] Error writing evaluated post to outbox/Firestore for ${item.uri}:`, err);
+        // Delete it so it's not stuck
+        deleteFromEvaluationQueue(item.uri);
       }
     }
 
