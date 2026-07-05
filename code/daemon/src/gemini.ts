@@ -151,10 +151,6 @@ export async function evaluatePost(
     };
   } catch (error: any) {
     console.error("Gemini evaluation error:", error);
-    return {
-      isRelevant: false,
-      score: 0,
-      reasoning: `Failed to evaluate post via Gemini: ${error.message || error}`
-    };
+    throw error;
   }
 }

@@ -420,13 +420,24 @@ async function handleRepostOrLike(
         quotedContext
       });
     } else {
-      const evalResult = await evaluatePost(
-        targetRecord.text || "",
-        targetHandle,
-        parentContext,
-        quotedContext,
-        matchRules
-      );
+      let evalResult;
+      try {
+        evalResult = await evaluatePost(
+          targetRecord.text || "",
+          targetHandle,
+          parentContext,
+          quotedContext,
+          matchRules
+        );
+      } catch (err: any) {
+        console.error("[Gemini Classification] Error calling Gemini API on resolved target:", err);
+        try {
+          logProcessingFailure("gemini_call", JSON.stringify(commit), err.message || String(err));
+        } catch (logErr) {
+          console.error("Failed to log gemini_call error in handleRepostOrLike", logErr);
+        }
+        return;
+      }
       if (evalResult.isRelevant) {
         await writePost({
           uri: postUri,

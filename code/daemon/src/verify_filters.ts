@@ -72,7 +72,13 @@ async function runTests() {
     }
   );
 
-  setMockEvaluator(async (text, handle, parentContext, quotedContext, matchRules) => {
+  const normalMockEvaluator = async (
+    text: string,
+    handle: string,
+    parentContext: any,
+    quotedContext: any,
+    matchRules: string[]
+  ) => {
     geminiCallCount++;
     geminiLastEvaluatedText = text;
     geminiLastParentContext = parentContext;
@@ -85,7 +91,8 @@ async function runTests() {
       score: isRelevant ? 85 : 10,
       reasoning: "Mock evaluation reasoning"
     };
-  });
+  };
+  setMockEvaluator(normalMockEvaluator);
 
   setMockFetchAllFollows(async (_did) => []);
 
@@ -485,6 +492,44 @@ async function runTests() {
   assert(failures.length > 0, "A context_fetch failure should be logged in processing_failures");
   assert(failures[0].error_message.includes("AppView API request timeout: HTTP 504"), "Error message should contain HTTP 504 info");
   assert(failures[0].raw_payload.includes("at://did:plc:parent/app.bsky.feed.post/999"), "Raw payload should contain the reply URI");
+
+  // ----------------------------------------------------
+  // Scenario 3.6: Exception Logging (Gemini Call Failures)
+  // ----------------------------------------------------
+  console.log("\nScenario 3.6: Exception Logging (Gemini Call Failures)...");
+
+  // Temporarily set mock evaluator to throw an error
+  setMockEvaluator(async () => {
+    throw new Error("Gemini Quota Exceeded (HTTP 429)");
+  });
+
+  const errorPostEvent = {
+    did: "did:plc:testerQuota",
+    time_us: 1715623467000000,
+    kind: "commit",
+    commit: {
+      rev: "rkeyquota1",
+      operation: "create",
+      collection: "app.bsky.feed.post",
+      rkey: "rkeyquota1",
+      cid: "bafyquotapost",
+      record: {
+        $type: "app.bsky.feed.post",
+        text: "Evaluating post with atproto keyword during quota outage",
+        createdAt: "2026-07-01T13:00:00.000Z"
+      }
+    }
+  };
+
+  await handleCommit(errorPostEvent, "did:plc:owner123");
+
+  // Restore normal mock evaluator
+  setMockEvaluator(normalMockEvaluator);
+
+  const geminiFailures = queryProcessingFailures("gemini_call");
+  assert(geminiFailures.length > 0, "A gemini_call failure should be logged in processing_failures");
+  assert(geminiFailures[0].error_message.includes("Gemini Quota Exceeded (HTTP 429)"), "Error message should contain quota error info");
+  assert(geminiFailures[0].raw_payload.includes("rkeyquota1"), "Raw payload should contain the target post's rkey");
 
   // ----------------------------------------------------
   // Scenario 3.1: Liked & Reposted Content Resolver (Gap 8)
