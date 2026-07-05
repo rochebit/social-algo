@@ -1571,5 +1571,43 @@ button[title*="Extra Positive"], .btn-fb-mobile[style*="success"] {
   border-radius: 4px;
 }
 
+.modal-header-right {
+  margin-left: auto;
+  margin-right: 2rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.throughput-table-container {
+  margin-top: 0.25rem;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.throughput-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  text-align: left;
+}
+
+.throughput-table th,
+.throughput-table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.throughput-table th {
+  background-color: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.throughput-table tr:last-child td {
+  border-bottom: none;
+}
+
+
 
 

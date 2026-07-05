@@ -56,6 +56,7 @@ export interface PostDocument {
   mediaEmbed: MediaEmbed;
   parentContext: PostContext | null;
   quotedContext: PostContext | null;
+  version: string;
 }
 
 export interface FeedbackLogDocument {
@@ -392,6 +393,16 @@ export async function publishStats(stats: {
   lastBatchRelevantCount: number;
   lastError: string | null;
   backendStatus: string;
+  version: string;
+  firehoseCount1h: number;
+  firehoseCount24h: number;
+  passedStage1Count1h: number;
+  passedStage1Count24h: number;
+  passedStage2Count1h: number;
+  passedStage2Count24h: number;
+  lastFirehosePostAt: string | null;
+  lastPassedStage1At: string | null;
+  lastPassedStage2At: string | null;
 }): Promise<void> {
   if (mockStatsHandler) {
     await mockStatsHandler(stats);
@@ -404,3 +415,93 @@ export async function publishStats(stats: {
     console.error("Failed to publish backend stats to Firestore:", err);
   }
 }
+
+let mockDeploymentWriteHandler: ((deployment: any) => Promise<void>) | null = null;
+let mockDeploymentQueryHandler: (() => Promise<any[]>) | null = null;
+
+export function setMockDeploymentHandlers(
+  queryFn: typeof mockDeploymentQueryHandler,
+  writeFn: typeof mockDeploymentWriteHandler
+): void {
+  mockDeploymentQueryHandler = queryFn;
+  mockDeploymentWriteHandler = writeFn;
+}
+
+/**
+ * Startup Deployment Shift Tracker (Section 8.2.6).
+ * Compares current system settings and version to the latest deployed and logs changes if any.
+ */
+export async function trackDeploymentShift(): Promise<void> {
+  const currentVersion = process.env.SYSTEM_VERSION || "v1.0.0";
+  const currentModel = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite";
+  const currentInterval = parseInt(process.env.BATCH_INTERVAL_SECONDS || "300", 10);
+  const currentCap = parseInt(process.env.BATCH_EVAL_CAP || "100", 10);
+  const currentAiEnabled = process.env.AI_FILTERING_ENABLED !== "false";
+
+  try {
+    let latestDoc: any = null;
+    if (mockDeploymentQueryHandler) {
+      const mockDocs = await mockDeploymentQueryHandler();
+      if (mockDocs && mockDocs.length > 0) {
+        latestDoc = mockDocs[0];
+      }
+    } else {
+      const db = initFirestore();
+      const querySnapshot = await db
+        .collection("deployments")
+        .orderBy("deployedAt", "desc")
+        .limit(1)
+        .get();
+      if (!querySnapshot.empty) {
+        latestDoc = querySnapshot.docs[0].data();
+      }
+    }
+
+    let shouldWrite = false;
+    if (!latestDoc) {
+      console.log("[Deployment Tracker] No previous deployment found. Writing first entry.");
+      shouldWrite = true;
+    } else {
+      const versionDiff = latestDoc.version !== currentVersion;
+      const modelDiff = latestDoc.model !== currentModel;
+      const intervalDiff = latestDoc.batchIntervalSeconds !== currentInterval;
+      const capDiff = latestDoc.batchEvalCap !== currentCap;
+      const aiDiff = latestDoc.aiFilteringEnabled !== currentAiEnabled;
+
+      if (versionDiff || modelDiff || intervalDiff || capDiff || aiDiff) {
+        console.log("[Deployment Tracker] Configuration or version shift detected. Writing new deployment document.");
+        shouldWrite = true;
+      } else {
+        console.log("[Deployment Tracker] Configuration matches latest deployment. No version shift logged.");
+      }
+    }
+
+    if (shouldWrite) {
+      const timestamp = new Date().toISOString();
+      const sanitizedVersion = currentVersion.replace(/[^a-zA-Z0-9.-]/g, "_");
+      const sanitizedTimestamp = timestamp.replace(/[^a-zA-Z0-9.-]/g, "_");
+      const docId = `${sanitizedVersion}_${sanitizedTimestamp}`;
+
+      const newDeployment = {
+        version: currentVersion,
+        deployedAt: timestamp,
+        environment: "backend",
+        model: currentModel,
+        batchIntervalSeconds: currentInterval,
+        batchEvalCap: currentCap,
+        aiFilteringEnabled: currentAiEnabled
+      };
+
+      if (mockDeploymentWriteHandler) {
+        await mockDeploymentWriteHandler(newDeployment);
+      } else {
+        const db = initFirestore();
+        await db.collection("deployments").doc(docId).set(newDeployment);
+      }
+      console.log(`[Deployment Tracker] Logged new deployment shift: ${docId}`);
+    }
+  } catch (err) {
+    console.error("Error in Startup Deployment Shift Tracker:", err);
+  }
+}
+

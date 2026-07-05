@@ -26,6 +26,8 @@ import { Agent } from "@atproto/api";
 import Hls from "hls.js";
 import "./index.css";
 
+const FRONTEND_VERSION = import.meta.env.VITE_SYSTEM_VERSION || "v1.0.0";
+
 // -----------------------------------------------------------------------
 // Data Interfaces
 // -----------------------------------------------------------------------
@@ -83,6 +85,16 @@ interface BackendStats {
   lastBatchRelevantCount: number;
   lastError: string | null;
   backendStatus: string;
+  version?: string;
+  firehoseCount1h?: number;
+  firehoseCount24h?: number;
+  passedStage1Count1h?: number;
+  passedStage1Count24h?: number;
+  passedStage2Count1h?: number;
+  passedStage2Count24h?: number;
+  lastFirehosePostAt?: string | null;
+  lastPassedStage1At?: string | null;
+  lastPassedStage2At?: string | null;
 }
 
 // -----------------------------------------------------------------------
@@ -988,7 +1000,8 @@ export function App() {
             authorDid: post.authorDid,
             feedback: feedbackValue,
             submittedAt: now,
-            userEmail: user?.email || OWNER_EMAIL
+            userEmail: user?.email || OWNER_EMAIL,
+            version: FRONTEND_VERSION
           });
         } catch (err) {
           console.error("Error setting feedback:", err);
@@ -1333,7 +1346,17 @@ export function App() {
       lastBatchSuccessCount: 0,
       lastBatchRelevantCount: 0,
       lastError: null,
-      backendStatus: "online"
+      backendStatus: "online",
+      version: "v1.0.0",
+      firehoseCount1h: 0,
+      firehoseCount24h: 0,
+      passedStage1Count1h: 0,
+      passedStage1Count24h: 0,
+      passedStage2Count1h: 0,
+      passedStage2Count24h: 0,
+      lastFirehosePostAt: null,
+      lastPassedStage1At: null,
+      lastPassedStage2At: null
     };
 
     const status = getBackendStatus(stats);
@@ -1349,6 +1372,7 @@ export function App() {
           <div className="modal-header">
             <h3>Backend Status: <span className={`status-text ${status.color}`}>{status.label.toUpperCase()}</span></h3>
             <div className={`status-dot ${status.color}`} style={{ width: "12px", height: "12px", border: "none" }} />
+            <div className="modal-header-right">Version: {stats.version || "v1.0.0"}</div>
           </div>
 
           <div className="modal-body">
@@ -1368,6 +1392,47 @@ export function App() {
               <span className="metric-label">Last Batch Telemetry:</span>
               <span className="metric-value">
                 Last Batch Run: Completed at {lastBatchTimeStr}. Selected {stats.lastBatchProcessedCount} posts. Classified {stats.lastBatchSuccessCount} successfully, finding {stats.lastBatchRelevantCount} relevant posts.
+              </span>
+            </div>
+
+            <div className="metric-row">
+              <span className="metric-label">Throughput Statistics:</span>
+              <div className="throughput-table-container">
+                <table className="throughput-table">
+                  <thead>
+                    <tr>
+                      <th>Stage</th>
+                      <th>1 Hour</th>
+                      <th>24 Hours</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Firehose Ingested</td>
+                      <td>{stats.firehoseCount1h ?? 0}</td>
+                      <td>{stats.firehoseCount24h ?? 0}</td>
+                    </tr>
+                    <tr>
+                      <td>Pre-Filter Matches</td>
+                      <td>{stats.passedStage1Count1h ?? 0}</td>
+                      <td>{stats.passedStage1Count24h ?? 0}</td>
+                    </tr>
+                    <tr>
+                      <td>Gemini Relevant Matches</td>
+                      <td>{stats.passedStage2Count1h ?? 0}</td>
+                      <td>{stats.passedStage2Count24h ?? 0}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="metric-row">
+              <span className="metric-label">Stage Activity Timestamps:</span>
+              <span className="metric-value" style={{ display: "block" }}>
+                <div>Ingest Activity: {stats.lastFirehosePostAt ? `${stats.lastFirehosePostAt} (${getRelativeTime(stats.lastFirehosePostAt)})` : "never"}</div>
+                <div>Pre-Filter Activity: {stats.lastPassedStage1At ? `${stats.lastPassedStage1At} (${getRelativeTime(stats.lastPassedStage1At)})` : "never"}</div>
+                <div>Gemini Match Activity: {stats.lastPassedStage2At ? `${stats.lastPassedStage2At} (${getRelativeTime(stats.lastPassedStage2At)})` : "never"}</div>
               </span>
             </div>
 

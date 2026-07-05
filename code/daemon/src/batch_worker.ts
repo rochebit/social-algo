@@ -5,8 +5,19 @@ import {
   getEvaluationQueueSize,
   getGeminiFailureCount24h,
   getLastProcessingError,
-  logProcessingFailure
+  logProcessingFailure,
+  logMetric,
+  pruneMetrics,
+  getMetricsCounts,
+  getLatestMetricTimestamp
 } from "./db";
+import { lastFirehosePostAt, lastPassedStage1At } from "./jetstream";
+
+export let lastPassedStage2At: string | null = null;
+
+export function initBatchWorkerState(): void {
+  lastPassedStage2At = getLatestMetricTimestamp("passed_stage2");
+}
 import { evaluatePostsBatch, BatchEvaluationRequest, isMockEvaluatorActive } from "./gemini";
 import { writePost, publishStats } from "./firestore";
 import { resolveParentContext, resolveQuotedContext } from "./jetstream";
@@ -32,6 +43,12 @@ export async function runBatchEvaluation(): Promise<void> {
   }
   isRunningBatch = true;
   console.log(`[Batch Worker] Running batch evaluation (cap: ${BATCH_EVAL_CAP})...`);
+
+  try {
+    pruneMetrics();
+  } catch (err) {
+    console.error("[Batch Worker] Failed to prune metrics:", err);
+  }
 
   let processedCount = 0;
   let successCount = 0;
@@ -129,6 +146,8 @@ export async function runBatchEvaluation(): Promise<void> {
           const mediaEmbedParsed = JSON.parse(item.media_embed || "{}");
           const matchRulesParsed = JSON.parse(item.match_rules);
 
+          const systemVersion = process.env.SYSTEM_VERSION || "v1.0.0";
+
           await writePost({
             uri: item.uri,
             cid: item.cid,
@@ -144,8 +163,13 @@ export async function runBatchEvaluation(): Promise<void> {
             facets: facetsParsed,
             mediaEmbed: mediaEmbedParsed,
             parentContext,
-            quotedContext
+            quotedContext,
+            version: systemVersion
           });
+
+          // Immediately write a metrics entry and update local variable
+          logMetric("passed_stage2");
+          lastPassedStage2At = new Date().toISOString();
         }
 
         // Successfully processed (either relevant or irrelevant)
@@ -174,6 +198,8 @@ export async function triggerHeartbeat(): Promise<void> {
   const queueSize = getEvaluationQueueSize();
   const geminiFailureCount24h = getGeminiFailureCount24h();
   const lastError = getLastProcessingError();
+  const counts = getMetricsCounts();
+  const systemVersion = process.env.SYSTEM_VERSION || "v1.0.0";
 
   await publishStats({
     lastActive: new Date().toISOString(),
@@ -184,7 +210,17 @@ export async function triggerHeartbeat(): Promise<void> {
     lastBatchSuccessCount,
     lastBatchRelevantCount,
     lastError,
-    backendStatus: "online"
+    backendStatus: "online",
+    version: systemVersion,
+    firehoseCount1h: counts.firehoseCount1h,
+    firehoseCount24h: counts.firehoseCount24h,
+    passedStage1Count1h: counts.passedStage1Count1h,
+    passedStage1Count24h: counts.passedStage1Count24h,
+    passedStage2Count1h: counts.passedStage2Count1h,
+    passedStage2Count24h: counts.passedStage2Count24h,
+    lastFirehosePostAt,
+    lastPassedStage1At,
+    lastPassedStage2At
   });
 }
 
@@ -192,6 +228,13 @@ export function startBatchWorker(): void {
   const intervalSec = parseInt(process.env.BATCH_INTERVAL_SECONDS || "300", 10);
   const cap = parseInt(process.env.BATCH_EVAL_CAP || "100", 10);
   console.log(`[Batch Worker] Starting batch worker with interval: ${intervalSec}s, cap: ${cap}`);
+  
+  // Load state from DB on startup
+  try {
+    initBatchWorkerState();
+  } catch (err) {
+    console.error("[Batch Worker] Failed to initialize state from DB:", err);
+  }
   
   // Run immediately on startup
   runBatchEvaluation().catch(err => {

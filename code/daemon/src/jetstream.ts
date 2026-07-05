@@ -8,10 +8,23 @@ import {
   queryLocalPost,
   logProcessingFailure,
   queueForEvaluation,
-  deleteFromEvaluationQueue
+  deleteFromEvaluationQueue,
+  logMetric,
+  getLatestMetricTimestamp,
+  updateLocalPostFeedback,
+  addLocalPost,
+  queueOutboxWrite
 } from "./db";
 import { evaluatePost } from "./gemini";
-import { writePost, softDeletePost } from "./firestore";
+import { writePost, softDeletePost, initFirestore, getPostId } from "./firestore";
+
+export let lastFirehosePostAt: string | null = null;
+export let lastPassedStage1At: string | null = null;
+
+export function initJetstreamState(): void {
+  lastFirehosePostAt = getLatestMetricTimestamp("firehose_received");
+  lastPassedStage1At = getLatestMetricTimestamp("passed_stage1");
+}
 
 const DATA_DIR = path.resolve(__dirname, "../data");
 const CURSOR_PATH = path.join(DATA_DIR, "cursor.json");
@@ -419,7 +432,8 @@ async function handleRepostOrLike(
         facets,
         mediaEmbed,
         parentContext,
-        quotedContext
+        quotedContext,
+        version: process.env.SYSTEM_VERSION || "v1.0.0"
       });
     } else {
       queueForEvaluation({
@@ -443,6 +457,123 @@ async function handleRepostOrLike(
   }
 }
 
+/**
+ * Processes user engagement signals (false negative capture) per Section 6.3.
+ */
+export async function handleUserEngagementFromUri(uri: string, userDid: string): Promise<void> {
+  try {
+    let exists = false;
+    let hasFeedback = false;
+
+    // Check Firestore if possible
+    try {
+      const db = initFirestore();
+      const postId = getPostId(uri);
+      const docSnap = await db.collection("posts").doc(postId).get();
+      if (docSnap.exists) {
+        exists = true;
+        const data = docSnap.data();
+        if (data && data.feedback !== null && data.feedback !== undefined) {
+          hasFeedback = true;
+        }
+      }
+    } catch (err) {
+      // Fallback to SQLite
+      const localPost = queryLocalPost(uri);
+      if (localPost) {
+        exists = true;
+        if (localPost.feedback !== null && localPost.feedback !== undefined) {
+          hasFeedback = true;
+        }
+      }
+    }
+
+    if (exists && hasFeedback) {
+      return;
+    }
+
+    const currentTimestamp = new Date().toISOString();
+    const systemVersion = process.env.SYSTEM_VERSION || "v1.0.0";
+
+    if (exists) {
+      try {
+        updateLocalPostFeedback(uri, "interacted", currentTimestamp);
+      } catch (err) {
+        console.error(`Failed to update local post feedback: ${uri}`, err);
+      }
+
+      const docData = {
+        uri: uri,
+        matchRules: ["user_engagement_signal"],
+        version: systemVersion,
+        feedback: "interacted",
+        feedbackAt: currentTimestamp
+      };
+      queueOutboxWrite(uri, docData);
+    } else {
+      const res = await fetch(
+        `https://api.bsky.app/xrpc/app.bsky.feed.getPosts?uris=${encodeURIComponent(uri)}`
+      );
+      if (!res.ok) {
+        throw new Error(`AppView getPosts returned status: ${res.status}`);
+      }
+      const data = (await res.json()) as { posts?: any[] };
+      if (!data.posts || data.posts.length === 0) {
+        return;
+      }
+
+      const targetPost = data.posts[0];
+      const targetRecord = targetPost.record || {};
+      const targetAuthorDid: string = targetPost.author?.did || uri.split("/")[2];
+      const targetHandle: string = targetPost.author?.handle || targetAuthorDid;
+
+      const facets = parseFacets(targetRecord);
+      const mediaEmbed = parseMediaEmbed(targetRecord, targetAuthorDid);
+      
+      let parentContext = null;
+      let quotedContext = null;
+      try {
+        parentContext = await resolveParentContext(targetRecord);
+        quotedContext = await resolveQuotedContext(targetRecord);
+      } catch (err) {
+        console.error(`Error resolving context for engagement post: ${uri}`, err);
+      }
+
+      const postDoc = {
+        uri: uri,
+        cid: targetPost.cid || "",
+        authorDid: targetAuthorDid,
+        authorHandle: targetHandle,
+        text: targetRecord.text || "",
+        createdAt: targetRecord.createdAt || currentTimestamp,
+        matchedAt: currentTimestamp,
+        relevanceScore: 100,
+        relevanceExplanation: "Direct user engagement signal bypass",
+        matchRules: ["user_engagement_signal"],
+        feedback: "interacted",
+        feedbackAt: currentTimestamp,
+        isDeleted: false,
+        facets,
+        mediaEmbed,
+        parentContext,
+        quotedContext,
+        version: systemVersion
+      };
+
+      try {
+        addLocalPost(postDoc);
+        updateLocalPostFeedback(uri, "interacted", currentTimestamp);
+      } catch (err) {
+        console.error(`Failed to insert engagement post locally: ${uri}`, err);
+      }
+
+      queueOutboxWrite(uri, postDoc);
+    }
+  } catch (err) {
+    console.error(`Error handling user engagement for URI ${uri}:`, err);
+  }
+}
+
 // -----------------------------------------------------------------------
 // Jetstream Connection
 // -----------------------------------------------------------------------
@@ -460,6 +591,11 @@ let currentHostIndex = 0;
  * Subscribes to post, follow, repost, and like collections (Section 2.1).
  */
 export function startJetstream(userDid: string): void {
+  try {
+    initJetstreamState();
+  } catch (err) {
+    console.error("Failed to initialize jetstream state:", err);
+  }
   const cursor = loadCursor();
   const host = JETSTREAM_HOSTS[currentHostIndex];
   let url =
@@ -593,7 +729,15 @@ export async function handleCommit(msg: any, userDid: string): Promise<void> {
       if (operation !== "create") return; // Deletes are ignored per spec
 
       const actorDid = msg.did;
-      if (!isFollowed(actorDid) && actorDid !== userDid) return;
+      if (actorDid === userDid) {
+        const targetUri = commit.record?.subject?.uri;
+        if (targetUri) {
+          await handleUserEngagementFromUri(targetUri, userDid);
+        }
+        return;
+      }
+
+      if (!isFollowed(actorDid)) return;
 
       console.log(`[Resolver] ${eventType} by ${actorDid} — resolving target post...`);
       await handleRepostOrLike(commit, actorDid, eventType);
@@ -619,9 +763,36 @@ export async function handleCommit(msg: any, userDid: string): Promise<void> {
       const rkey = commit.rkey;
       const postUri = `at://${authorDid}/${collection}/${rkey}`;
 
+      // Global Telemetry Update
+      logMetric("firehose_received");
+      lastFirehosePostAt = new Date().toISOString();
+
       if (operation === "create") {
         const record = commit.record;
         if (!record || !record.text) return;
+
+        // Check if the author is the user themselves (Section 6.3)
+        if (authorDid === userDid) {
+          const targetUris = [postUri];
+          if (record.reply?.parent?.uri) {
+            targetUris.push(record.reply.parent.uri);
+          }
+          if (record.embed) {
+            let quoteUri: string | undefined;
+            if (record.embed.$type === "app.bsky.embed.record" && record.embed.record?.uri) {
+              quoteUri = record.embed.record.uri;
+            } else if (record.embed.$type === "app.bsky.embed.recordWithMedia" && record.embed.record?.record?.uri) {
+              quoteUri = record.embed.record.record.uri;
+            }
+            if (quoteUri) {
+              targetUris.push(quoteUri);
+            }
+          }
+          for (const tUri of targetUris) {
+            await handleUserEngagementFromUri(tUri, userDid);
+          }
+          return;
+        }
 
         // 3.1 Language Gate (Preliminary Check)
         if (Array.isArray(record.langs) && record.langs.length > 0 && !record.langs.includes("en")) {
@@ -659,6 +830,10 @@ export async function handleCommit(msg: any, userDid: string): Promise<void> {
         }
 
         if (!isMatch) return;
+
+        // Stage 1 Pass Telemetry Update
+        logMetric("passed_stage1");
+        lastPassedStage1At = new Date().toISOString();
 
         // Matched — resolve handle, parse facets/media/context, then evaluate
         const handle = await resolveDidToHandle(authorDid);
@@ -700,7 +875,8 @@ export async function handleCommit(msg: any, userDid: string): Promise<void> {
             facets,
             mediaEmbed,
             parentContext,
-            quotedContext
+            quotedContext,
+            version: process.env.SYSTEM_VERSION || "v1.0.0"
           });
         } else {
           queueForEvaluation({

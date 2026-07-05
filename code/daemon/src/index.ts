@@ -1,7 +1,7 @@
 import * as dotenv from "dotenv";
 import * as path from "path";
 import { initDb, hasFirstDegreeFollows, syncNetworkGraph } from "./db";
-import { initFirestore, startArchiverScheduler, startOutboxWorker } from "./firestore";
+import { initFirestore, startArchiverScheduler, startOutboxWorker, trackDeploymentShift } from "./firestore";
 import { startJetstream, startCursorPersistence } from "./jetstream";
 import { startBatchWorker } from "./batch_worker";
 
@@ -50,6 +50,14 @@ async function main() {
   // 3. Initialize Firestore Client
   console.log("Initializing Firestore client...");
   initFirestore();
+
+  // 3.5. Run Startup Deployment Shift Tracker
+  console.log("Running deployment shift tracker...");
+  try {
+    await trackDeploymentShift();
+  } catch (err) {
+    console.error("Failed to run deployment shift tracker:", err);
+  }
 
   // Start Outbox Sync Worker (retries queued writes in background)
   console.log("Starting outbox sync worker...");

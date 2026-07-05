@@ -19,11 +19,23 @@ import {
   getEvaluationQueueBatch,
   incrementEvaluationQueueRetry,
   clearEvaluationQueue,
-  clearOutbox
+  clearOutbox,
+  logMetric,
+  pruneMetrics,
+  getMetricsCounts,
+  clearMetricsLog
 } from "./db";
 import { setMockEvaluator } from "./gemini";
-import { setMockDbHandlers, processOutbox, stopOutboxWorker, getPostId, setMockStatsHandler } from "./firestore";
-import { handleCommit } from "./jetstream";
+import {
+  setMockDbHandlers,
+  processOutbox,
+  stopOutboxWorker,
+  getPostId,
+  setMockStatsHandler,
+  setMockDeploymentHandlers,
+  trackDeploymentShift
+} from "./firestore";
+import { handleCommit, handleUserEngagementFromUri } from "./jetstream";
 import { runBatchEvaluation, triggerHeartbeat } from "./batch_worker";
 
 // Test DB cleanup helper
@@ -907,6 +919,220 @@ async function runTests() {
   assert(geminiLastQuotedContext?.authorHandle === "quoted.handle", "Quoted context author handle should match");
   assert(geminiLastQuotedContext?.text === "This is the quoted post text", "Quoted context text should match");
   assert(geminiLastMatchRules.includes("keyword:atproto"), "Match rules should contain keyword:atproto");
+
+  // ----------------------------------------------------
+  // Scenario 7.10: Throughput Metrics & Database Pruning Verification
+  // ----------------------------------------------------
+  console.log("\nScenario 7.10: Throughput Metrics & Database Pruning Verification...");
+  
+  clearMetricsLog();
+  const nowMs = Date.now();
+  
+  // Case A: 50 events logged in the last 45 minutes
+  for (let i = 0; i < 50; i++) {
+    const ts = new Date(nowMs - 45 * 60 * 1000 + i).toISOString();
+    logMetric("firehose_received", ts);
+  }
+  // Case B: 30 events logged 5 hours ago
+  for (let i = 0; i < 30; i++) {
+    const ts = new Date(nowMs - 5 * 60 * 60 * 1000 + i).toISOString();
+    logMetric("passed_stage1", ts);
+  }
+  // Case C: 20 events logged 26 hours ago
+  for (let i = 0; i < 20; i++) {
+    const ts = new Date(nowMs - 26 * 60 * 60 * 1000 + i).toISOString();
+    logMetric("passed_stage2", ts);
+  }
+
+  // Verify counts before pruning
+  const countsBefore = getMetricsCounts();
+  assert(countsBefore.firehoseCount1h === 50, "Should have 50 firehose received events in 1h window");
+  assert(countsBefore.firehoseCount24h === 50, "Should have 50 firehose received events in 24h window");
+  assert(countsBefore.passedStage1Count1h === 0, "Should have 0 passed stage 1 events in 1h window");
+  assert(countsBefore.passedStage1Count24h === 30, "Should have 30 passed stage 1 events in 24h window");
+  assert(countsBefore.passedStage2Count1h === 0, "Should have 0 passed stage 2 events in 1h window");
+  assert(countsBefore.passedStage2Count24h === 0, "Should have 0 passed stage 2 events in 24h window (since Case C is 26h ago)");
+
+  // Run pruning
+  pruneMetrics();
+
+  // Verify counts after pruning
+  const countsAfter = getMetricsCounts();
+  const getRawCount = () => {
+    const r = getMetricsCounts();
+    return r.firehoseCount24h + r.passedStage1Count24h + r.passedStage2Count24h;
+  };
+  assert(getRawCount() === 80, "Metrics log table should have exactly 80 entries after pruning (20 older entries deleted)");
+  
+  // Verify stats publishing updates Firestore mock with correct throughput counts
+  latestStats = null;
+  await triggerHeartbeat();
+  assert(latestStats !== null, "triggerHeartbeat should publish stats");
+  assert(latestStats.firehoseCount1h === 50, "Published firehoseCount1h should be 50");
+  assert(latestStats.passedStage1Count24h === 30, "Published passedStage1Count24h should be 30");
+  assert(latestStats.passedStage2Count24h === 0, "Published passedStage2Count24h should be 0");
+
+  // ----------------------------------------------------
+  // Scenario 7.11: User Engagement Signal Capture
+  // ----------------------------------------------------
+  console.log("\nScenario 7.11: User Engagement Signal Capture...");
+
+  clearOutbox();
+
+  // Test Action 1 (User Action Capture)
+  const engagementPostUri = "at://did:plc:creator123/app.bsky.feed.post/engagement123";
+  
+  // Mock fetch for AppView XRPC getPosts
+  global.fetch = async (url: any, init?: any) => {
+    if (url.toString().includes("getPosts") && url.toString().includes(encodeURIComponent(engagementPostUri))) {
+      return {
+        ok: true,
+        json: async () => ({
+          posts: [{
+            uri: engagementPostUri,
+            cid: "bafyengagementcid",
+            author: {
+              did: "did:plc:creator123",
+              handle: "creator.bsky.social"
+            },
+            record: {
+              text: "Post engaged by user",
+              createdAt: "2026-07-02T10:00:00.000Z"
+            }
+          }]
+        })
+      } as Response;
+    }
+    return originalFetch(url, init);
+  };
+
+  const likeMsg = {
+    did: "did:plc:owner123", // USER_DID
+    time_us: 1715623470000000,
+    kind: "commit",
+    commit: {
+      operation: "create",
+      collection: "app.bsky.feed.like",
+      rkey: "3kslikerkey",
+      record: {
+        $type: "app.bsky.feed.like",
+        subject: {
+          uri: engagementPostUri,
+          cid: "bafyengagementcid"
+        },
+        createdAt: "2026-07-02T10:00:00.000Z"
+      }
+    }
+  };
+
+  writtenPosts.length = 0;
+  await handleCommit(likeMsg, "did:plc:owner123");
+  await processOutbox();
+
+  assert(writtenPosts.length === 1, "Should resolve and write engagement post to outbox/Firestore");
+  assert(writtenPosts[0].uri === engagementPostUri, "URI of logged engagement post should match target");
+  assert(writtenPosts[0].feedback === "interacted", "Logged engagement post feedback should be 'interacted'");
+  assert(writtenPosts[0].matchRules.includes("user_engagement_signal"), "matchRules should contain 'user_engagement_signal'");
+  assert(writtenPosts[0].version === "v1.0.0", "version should match current version (v1.0.0)");
+
+  // Test Action 2 (Existing Post Engagement)
+  const existingPostDoc = {
+    uri: "at://did:plc:creator123/app.bsky.feed.post/existing123",
+    cid: "bafyexistingcid",
+    authorDid: "did:plc:creator123",
+    authorHandle: "creator.bsky.social",
+    text: "Existing post to engage with",
+    createdAt: "2026-07-02T11:00:00.000Z",
+    matchedAt: "2026-07-02T11:00:00.000Z",
+    relevanceScore: 80,
+    relevanceExplanation: "relevant",
+    matchRules: ["keyword:atproto"],
+    isDeleted: false,
+    facets: [],
+    mediaEmbed: { type: "none" },
+    parentContext: null,
+    quotedContext: null,
+    version: "v1.0.0"
+  };
+
+  const { addLocalPost: dbAddLocalPost } = require("./db");
+  dbAddLocalPost(existingPostDoc);
+
+  const repostMsgOwner = {
+    did: "did:plc:owner123", // USER_DID
+    time_us: 1715623480000000,
+    kind: "commit",
+    commit: {
+      operation: "create",
+      collection: "app.bsky.feed.repost",
+      rkey: "3ksrepostrkey",
+      record: {
+        $type: "app.bsky.feed.repost",
+        subject: {
+          uri: existingPostDoc.uri,
+          cid: "bafyexistingcid"
+        },
+        createdAt: "2026-07-02T11:05:00.000Z"
+      }
+    }
+  };
+
+  writtenPosts.length = 0;
+  await handleCommit(repostMsgOwner, "did:plc:owner123");
+  await processOutbox();
+
+  assert(writtenPosts.length === 1, "Should update the existing post feedback and push to Firestore");
+  assert(writtenPosts[0].uri === existingPostDoc.uri, "URI of updated post should match");
+  assert(writtenPosts[0].feedback === "interacted", "Updated post feedback should be 'interacted'");
+  assert(writtenPosts[0].matchRules.includes("user_engagement_signal"), "Updated post matchRules should contain 'user_engagement_signal'");
+
+  global.fetch = originalFetch;
+
+  // ----------------------------------------------------
+  // Scenario 7.12: Version & Deployment Shift Verification
+  // ----------------------------------------------------
+  console.log("\nScenario 7.12: Version & Deployment Shift Verification...");
+
+  assert(writtenPosts[0].version === "v1.0.0", "Written post should have v1.0.0 version attribute");
+
+  let queryCount = 0;
+  let loggedDeployments: any[] = [];
+
+  setMockDeploymentHandlers(
+    async () => {
+      queryCount++;
+      return loggedDeployments;
+    },
+    async (dep) => {
+      loggedDeployments.unshift(dep);
+    }
+  );
+
+  process.env.SYSTEM_VERSION = "v1.1.0";
+  process.env.GEMINI_MODEL = "gemini-3.1-flash-lite";
+  process.env.BATCH_INTERVAL_SECONDS = "300";
+  process.env.BATCH_EVAL_CAP = "100";
+  process.env.AI_FILTERING_ENABLED = "true";
+
+  await trackDeploymentShift();
+  assert(queryCount === 1, "Should query deployments collection");
+  assert(loggedDeployments.length === 1, "Should log a new deployment document");
+  assert(loggedDeployments[0].version === "v1.1.0", "New deployment version should be v1.1.0");
+
+  queryCount = 0;
+  await trackDeploymentShift();
+  assert(queryCount === 1, "Should query deployments collection again");
+  assert(loggedDeployments.length === 1, "Should NOT write a new deployment because settings are identical");
+
+  process.env.BATCH_EVAL_CAP = "200";
+  queryCount = 0;
+  await trackDeploymentShift();
+  assert(queryCount === 1, "Should query deployments collection third time");
+  assert(loggedDeployments.length === 2, "Should log another deployment document due to BATCH_EVAL_CAP change");
+  assert(loggedDeployments[0].batchEvalCap === 200, "Logged deployment cap should be updated to 200");
+
+  process.env.SYSTEM_VERSION = "v1.0.0";
+  process.env.BATCH_EVAL_CAP = "100";
 
   // ----------------------------------------------------
   // Cleanup & Summary

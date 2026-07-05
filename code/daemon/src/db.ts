@@ -78,10 +78,16 @@ export function initDb(): void {
         embed TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS metrics_log (
+        event_type TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_posts_feedback ON posts (feedback);
     CREATE INDEX IF NOT EXISTS idx_posts_matched ON posts (matched_at);
     CREATE INDEX IF NOT EXISTS idx_outbox_status ON posts_outbox (status);
     CREATE INDEX IF NOT EXISTS idx_evaluation_queue_matched ON evaluation_queue (matched_at);
+    CREATE INDEX IF NOT EXISTS idx_metrics_created_at ON metrics_log (created_at);
   `);
 }
 
@@ -511,5 +517,70 @@ export function clearEvaluationQueue(): void {
 export function clearOutbox(): void {
   db.exec("DELETE FROM posts_outbox;");
 }
+
+/**
+ * Logs a metric event to SQLite metrics_log (Section 8.2.4 & 8.2.5).
+ */
+export function logMetric(eventType: "firehose_received" | "passed_stage1" | "passed_stage2", createdAt?: string): void {
+  const ts = createdAt || new Date().toISOString();
+  db.prepare("INSERT INTO metrics_log (event_type, created_at) VALUES (?, ?)").run(eventType, ts);
+}
+
+/**
+ * Prunes expired metrics logs older than 24 hours (Section 8.2.5.0.1).
+ */
+export function pruneMetrics(): void {
+  const cutoff24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  db.prepare("DELETE FROM metrics_log WHERE created_at < ?").run(cutoff24h);
+}
+
+/**
+ * Calculates metrics counts for 1-hour and 24-hour windows (Section 8.2.5.0.2).
+ */
+export function getMetricsCounts(): {
+  firehoseCount1h: number;
+  firehoseCount24h: number;
+  passedStage1Count1h: number;
+  passedStage1Count24h: number;
+  passedStage2Count1h: number;
+  passedStage2Count24h: number;
+} {
+  const cutoff1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const cutoff24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  const getCount = (type: string, since: string): number => {
+    const result = db
+      .prepare("SELECT COUNT(*) as count FROM metrics_log WHERE event_type = ? AND created_at >= ?")
+      .get(type, since) as { count: number } | undefined;
+    return result ? result.count : 0;
+  };
+
+  return {
+    firehoseCount1h: getCount("firehose_received", cutoff1h),
+    firehoseCount24h: getCount("firehose_received", cutoff24h),
+    passedStage1Count1h: getCount("passed_stage1", cutoff1h),
+    passedStage1Count24h: getCount("passed_stage1", cutoff24h),
+    passedStage2Count1h: getCount("passed_stage2", cutoff1h),
+    passedStage2Count24h: getCount("passed_stage2", cutoff24h)
+  };
+}
+
+/**
+ * Gets the latest timestamp for a given event type in metrics_log (Section 8.2.5).
+ */
+export function getLatestMetricTimestamp(eventType: string): string | null {
+  const result = db
+    .prepare("SELECT MAX(created_at) as last_ts FROM metrics_log WHERE event_type = ?")
+    .get(eventType) as { last_ts: string | null } | undefined;
+  return result ? result.last_ts : null;
+}
+
+/**
+ * Test helper: deletes all rows from metrics_log.
+ */
+export function clearMetricsLog(): void {
+  db.exec("DELETE FROM metrics_log;");
+}
+
 
 
