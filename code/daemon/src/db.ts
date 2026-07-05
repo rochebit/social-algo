@@ -61,9 +61,27 @@ export function initDb(): void {
         created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS evaluation_queue (
+        uri TEXT PRIMARY KEY,
+        cid TEXT NOT NULL,
+        author_did TEXT NOT NULL,
+        author_handle TEXT NOT NULL,
+        text TEXT NOT NULL,
+        langs TEXT,
+        facets TEXT,
+        media_embed TEXT,
+        match_rules TEXT NOT NULL,
+        retry_count INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        matched_at TEXT NOT NULL,
+        reply TEXT,
+        embed TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_posts_feedback ON posts (feedback);
     CREATE INDEX IF NOT EXISTS idx_posts_matched ON posts (matched_at);
     CREATE INDEX IF NOT EXISTS idx_outbox_status ON posts_outbox (status);
+    CREATE INDEX IF NOT EXISTS idx_evaluation_queue_matched ON evaluation_queue (matched_at);
   `);
 }
 
@@ -364,4 +382,134 @@ export function queryProcessingFailures(eventType?: string): any[] {
   }
   return db.prepare("SELECT * FROM processing_failures ORDER BY created_at DESC").all();
 }
+
+/**
+ * Inserts a post into the local SQLite evaluation_queue table.
+ */
+export function queueForEvaluation(post: {
+  uri: string;
+  cid: string;
+  authorDid: string;
+  authorHandle: string;
+  text: string;
+  langs: string[] | null;
+  facets: any[];
+  mediaEmbed: any;
+  matchRules: string[];
+  createdAt: string;
+  matchedAt: string;
+  reply?: any | null;
+  embed?: any | null;
+}): void {
+  db.prepare(`
+    INSERT OR REPLACE INTO evaluation_queue (
+      uri, cid, author_did, author_handle, text, langs, facets, media_embed, match_rules, retry_count, created_at, matched_at, reply, embed
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+  `).run(
+    post.uri,
+    post.cid || "",
+    post.authorDid || "",
+    post.authorHandle || "",
+    post.text || "",
+    post.langs ? JSON.stringify(post.langs) : null,
+    JSON.stringify(post.facets || []),
+    JSON.stringify(post.mediaEmbed || {}),
+    JSON.stringify(post.matchRules || []),
+    post.createdAt || "",
+    post.matchedAt || "",
+    post.reply ? JSON.stringify(post.reply) : null,
+    post.embed ? JSON.stringify(post.embed) : null
+  );
+}
+
+export interface EvaluationQueueItem {
+  uri: string;
+  cid: string;
+  author_did: string;
+  author_handle: string;
+  text: string;
+  langs: string | null;
+  facets: string | null;
+  media_embed: string | null;
+  match_rules: string;
+  retry_count: number;
+  created_at: string;
+  matched_at: string;
+  reply: string | null;
+  embed: string | null;
+}
+
+/**
+ * Retrieves the batch of posts in evaluation_queue ordered by matched_at DESC.
+ */
+export function getEvaluationQueueBatch(limit: number): EvaluationQueueItem[] {
+  return db
+    .prepare(`
+      SELECT uri, cid, author_did, author_handle, text, langs, facets, media_embed, match_rules, retry_count, created_at, matched_at, reply, embed
+      FROM evaluation_queue
+      ORDER BY matched_at DESC
+      LIMIT ?
+    `)
+    .all(limit) as unknown as EvaluationQueueItem[];
+}
+
+/**
+ * Deletes a post from the evaluation_queue.
+ */
+export function deleteFromEvaluationQueue(uri: string): void {
+  db.prepare("DELETE FROM evaluation_queue WHERE uri = ?").run(uri);
+}
+
+/**
+ * Increments the retry_count of a post in the evaluation_queue.
+ */
+export function incrementEvaluationQueueRetry(uri: string): void {
+  db.prepare("UPDATE evaluation_queue SET retry_count = retry_count + 1 WHERE uri = ?").run(uri);
+}
+
+/**
+ * Retrieves the size of the evaluation queue.
+ */
+export function getEvaluationQueueSize(): number {
+  const result = db
+    .prepare("SELECT COUNT(*) as count FROM evaluation_queue")
+    .get() as { count: number } | undefined;
+  return result ? result.count : 0;
+}
+
+/**
+ * Counts gemini call failures logged in processing_failures in the last 24 hours.
+ */
+export function getGeminiFailureCount24h(): number {
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const result = db
+    .prepare("SELECT COUNT(*) as count FROM processing_failures WHERE event_type = 'gemini_call' AND created_at >= ?")
+    .get(yesterday) as { count: number } | undefined;
+  return result ? result.count : 0;
+}
+
+/**
+ * Gets the error message of the most recent failure in processing_failures, or null.
+ */
+export function getLastProcessingError(): string | null {
+  const result = db
+    .prepare("SELECT error_message FROM processing_failures ORDER BY id DESC LIMIT 1")
+    .get() as { error_message: string } | undefined;
+  return result ? result.error_message : null;
+}
+
+/**
+ * Test helper: deletes all rows from evaluation_queue.
+ */
+export function clearEvaluationQueue(): void {
+  db.exec("DELETE FROM evaluation_queue;");
+}
+
+/**
+ * Test helper: deletes all rows from posts_outbox.
+ */
+export function clearOutbox(): void {
+  db.exec("DELETE FROM posts_outbox;");
+}
+
 

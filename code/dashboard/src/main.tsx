@@ -73,6 +73,18 @@ interface Post {
   mediaEmbed?: MediaEmbed | null;
 }
 
+interface BackendStats {
+  lastActive: string;
+  lastBatchTime: string;
+  queueSize: number;
+  geminiFailureCount24h: number;
+  lastBatchProcessedCount: number;
+  lastBatchSuccessCount: number;
+  lastBatchRelevantCount: number;
+  lastError: string | null;
+  backendStatus: string;
+}
+
 // -----------------------------------------------------------------------
 // Firebase Config & Initialization
 // -----------------------------------------------------------------------
@@ -572,6 +584,9 @@ export function App() {
   // Lightbox state
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
+  const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
+  const [backendStats, setBackendStats] = useState<BackendStats | null>(null);
+
   // Mock data store
   const [mockPostsStore, setMockPostsStore] = useState<Post[]>(MOCK_DB_POSTS);
   const [totalUnreviewed, setTotalUnreviewed] = useState<number>(0);
@@ -886,6 +901,38 @@ export function App() {
     }
   }, [user, currentRoute, mockPostsStore, feedKey]);
 
+  useEffect(() => {
+    if (isMockMode) {
+      setBackendStats({
+        lastActive: new Date().toISOString(),
+        lastBatchTime: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+        queueSize: 12,
+        geminiFailureCount24h: 0,
+        lastBatchProcessedCount: 45,
+        lastBatchSuccessCount: 45,
+        lastBatchRelevantCount: 3,
+        lastError: null,
+        backendStatus: "online"
+      });
+      return;
+    }
+
+    if (!user || !firestoreDb) return;
+
+    const docRef = doc(firestoreDb, "stats", "backend");
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setBackendStats(docSnap.data() as BackendStats);
+      } else {
+        console.warn("Backend stats document does not exist.");
+      }
+    }, (error) => {
+      console.error("Error listening to backend stats:", error);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
   const handleLoadNewPosts = () => {
     setFeedKey((k) => k + 1);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1005,41 +1052,56 @@ export function App() {
   // Render Components
   // -----------------------------------------------------------------------
 
-  const renderHeader = () => (
-    <header>
-      <div className="header-brand" onClick={handleLogoClick} style={{ cursor: "pointer" }} title="Click to refresh and check for updates">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--primary)" }}>
-          <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-          <polyline points="2 17 12 22 22 17"></polyline>
-          <polyline points="2 12 12 17 22 12"></polyline>
-        </svg>
-        <h1>ATProto Feed Monitor</h1>
-        <span className="unreviewed-counter-header" title="Unreviewed posts remaining">
-          [{totalUnreviewed} posts remaining to review]
-        </span>
-      </div>
-      <div className="header-actions">
-        {bskyUser ? (
-          <div className="bsky-status connected">
-            <span>🦋 @{bskyUser.handle}</span>
-            <button className="btn btn-sm btn-danger" style={{ padding: "2px 6px", fontSize: "0.7rem" }} onClick={handleDisconnectBsky}>Disconnect</button>
-          </div>
-        ) : (
-          <button className="btn btn-sm btn-primary" onClick={handleConnectBsky}>Connect Bluesky</button>
-        )}
-        {user && (
-          <div className="user-badge" title={user.email}>
-            <img src={user.photoURL} alt="Avatar" />
-            <span>{user.displayName || "Owner"}</span>
-            <button className="btn btn-sm" style={{ marginLeft: "0.5rem", padding: "2px 6px", fontSize: "0.7rem", backgroundColor: "transparent", borderColor: "transparent" }} onClick={() => {
-              if (isMockMode) { setUser(null); navigateTo("/login"); }
-              else firebaseSignOut(firebaseAuth);
-            }}>Sign Out</button>
-          </div>
-        )}
-      </div>
-    </header>
-  );
+
+
+  const getBackendStatus = (stats: BackendStats | null) => {
+    if (!stats) return { color: "red", label: "Offline", tooltip: "Status: Offline | No stats available" };
+    
+    const lastActiveDate = new Date(stats.lastActive);
+    const now = new Date();
+    const diffMins = (now.getTime() - lastActiveDate.getTime()) / 60000;
+    
+    const isRecent = diffMins <= 7;
+    const hasIssues = stats.geminiFailureCount24h > 0 || stats.lastError !== null;
+    
+    if (isRecent) {
+      if (hasIssues) {
+        return {
+          color: "amber",
+          label: "Issues Detected",
+          tooltip: `Status: Issues | Queue: ${stats.queueSize} | Failures: ${stats.geminiFailureCount24h}`
+        };
+      } else {
+        return {
+          color: "green",
+          label: "Online",
+          tooltip: `Status: Online | Queue: ${stats.queueSize} | Failures: ${stats.geminiFailureCount24h}`
+        };
+      }
+    } else {
+      return {
+        color: "red",
+        label: "Offline",
+        tooltip: `Status: Offline (Last Active: ${getRelativeTime(stats.lastActive)}) | Queue: ${stats.queueSize} | Failures: ${stats.geminiFailureCount24h}`
+      };
+    }
+  };
+
+  const renderHeader = () => {
+    const status = getBackendStatus(backendStats);
+    return (
+      <header id="app-header">
+        <button id="menu-toggle-btn" onClick={() => setIsDrawerOpen(true)} title="Open side drawer">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
+        <div id="backend-status-dot" className={`status-dot ${status.color}`} title={status.tooltip} />
+      </header>
+    );
+  };
 
   const getFeedbackLabel = (fb: Post["feedback"]) => {
     switch (fb) {
@@ -1246,6 +1308,90 @@ export function App() {
     <div className="app-root-wrapper">
       {renderHeader()}
 
+      {/* Drawer Backdrop Overlay */}
+      {isDrawerOpen && (
+        <div id="drawer-backdrop" onClick={() => setIsDrawerOpen(false)} />
+      )}
+
+      {/* Collapsible Side Drawer */}
+      <div id="side-drawer" className={isDrawerOpen ? "open" : ""}>
+        <div className="drawer-header">
+          <div className="drawer-logo" onClick={handleLogoClick} style={{ cursor: "pointer" }} title="Click to refresh and check for updates">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--primary)" }}>
+              <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+              <polyline points="2 17 12 22 22 17"></polyline>
+              <polyline points="2 12 12 17 22 12"></polyline>
+            </svg>
+            <h2>ATProto</h2>
+          </div>
+          <button id="close-drawer-btn" className="close-btn" onClick={() => setIsDrawerOpen(false)} title="Close drawer">✕</button>
+        </div>
+
+        {user && (
+          <div className="drawer-profile">
+            <img src={user.photoURL} alt="Avatar" />
+            <div className="profile-info">
+              <span className="profile-name">{user.displayName || "Owner"}</span>
+              <span className="profile-email">{user.email}</span>
+            </div>
+            <button className="btn btn-sm btn-outline-danger" onClick={() => {
+              if (isMockMode) { setUser(null); navigateTo("/login"); }
+              else firebaseSignOut(firebaseAuth);
+              setIsDrawerOpen(false);
+            }}>Sign Out</button>
+          </div>
+        )}
+
+        <div className="drawer-connection">
+          {bskyUser ? (
+            <div className="bsky-status connected">
+              <span>🦋 @{bskyUser.handle}</span>
+              <button className="btn btn-sm btn-danger" onClick={() => { handleDisconnectBsky(); setIsDrawerOpen(false); }}>Disconnect</button>
+            </div>
+          ) : (
+            <button className="btn btn-sm btn-primary w-100" onClick={() => { handleConnectBsky(); setIsDrawerOpen(false); }}>Connect Bluesky</button>
+          )}
+        </div>
+
+        <nav className="drawer-nav">
+          <button className={`nav-link-btn ${currentRoute === "/feed" ? "active" : ""}`} onClick={() => { navigateTo("/feed"); setIsDrawerOpen(false); }}>
+            <span>📰 Feed ({totalUnreviewed})</span>
+          </button>
+          <button className={`nav-link-btn ${currentRoute === "/archive" ? "active" : ""}`} onClick={() => { navigateTo("/archive"); setIsDrawerOpen(false); }}>
+            <span>📁 Archive</span>
+          </button>
+        </nav>
+
+        {backendStats && (
+          <div id="backend-stats-panel">
+            <h3>Backend Status</h3>
+            <div className="stats-metric">
+              <span className="label">Queue:</span>
+              <span className="value">{backendStats.queueSize} pending</span>
+            </div>
+            <div className="stats-metric">
+              <span className="label">Gemini Fails (24h):</span>
+              <span className="value">{backendStats.geminiFailureCount24h}</span>
+            </div>
+            <div className="stats-metric">
+              <span className="label">Last Batch:</span>
+              <span className="value">
+                {getRelativeTime(backendStats.lastBatchTime)} ({backendStats.lastBatchProcessedCount} posts processed, {backendStats.lastBatchRelevantCount} matched)
+              </span>
+            </div>
+            {backendStats.lastError && (
+              <div className="stats-error-alert">
+                <div className="alert-header">Last Error</div>
+                <div className="alert-body">{backendStats.lastError}</div>
+              </div>
+            )}
+            <button className="btn btn-sm btn-outline-primary check-updates-btn" style={{ marginTop: "1rem", width: "100%" }} onClick={handleLogoClick}>
+              Check for Updates
+            </button>
+          </div>
+        )}
+      </div>
+
       {/* Lightbox */}
       {lightboxUrl && (
         <div className="lightbox-overlay" onClick={() => setLightboxUrl(null)}>
@@ -1266,15 +1412,6 @@ export function App() {
       {isMobile ? (
         /* Mobile Viewport Layout: Locked fullscreen single card, dynamic bottom bar (Section 4.1) */
         <div className="mobile-view-wrapper">
-          <div className="nav-tabs mobile-tabs">
-            <button className={`btn nav-link ${currentRoute === "/feed" ? "active" : ""}`} onClick={() => navigateTo("/feed")}>
-              🔥 Feed
-            </button>
-            <button className={`btn nav-link ${currentRoute === "/archive" ? "active" : ""}`} onClick={() => navigateTo("/archive")}>
-              📁 Archive
-            </button>
-          </div>
-
           <div className="mobile-viewport">
             {isFeedLoading ? (
               <div className="state-message">
@@ -1339,23 +1476,6 @@ export function App() {
               <span>Add your Firebase configuration to <code>.env</code> to connect to the live database.</span>
             </div>
           )}
-
-          <div className="nav-tabs">
-            <button
-              className={`btn nav-link ${currentRoute === "/feed" ? "active" : ""}`}
-              style={{ backgroundColor: "transparent", borderColor: "transparent" }}
-              onClick={() => navigateTo("/feed")}
-            >
-              🔥 Custom Feed
-            </button>
-            <button
-              className={`btn nav-link ${currentRoute === "/archive" ? "active" : ""}`}
-              style={{ backgroundColor: "transparent", borderColor: "transparent" }}
-              onClick={() => navigateTo("/archive")}
-            >
-              📁 Feedback Archive
-            </button>
-          </div>
 
           {isFeedLoading ? (
             <div className="state-message">

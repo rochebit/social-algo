@@ -6,7 +6,9 @@ import {
   addFirstDegreeFollow,
   removeFirstDegreeFollowByRkey,
   queryLocalPost,
-  logProcessingFailure
+  logProcessingFailure,
+  queueForEvaluation,
+  deleteFromEvaluationQueue
 } from "./db";
 import { evaluatePost } from "./gemini";
 import { writePost, softDeletePost } from "./firestore";
@@ -333,7 +335,7 @@ async function fetchPostContext(uri: string): Promise<PostContext | null> {
 /**
  * Resolves parent post context if the record is a reply (Section 5.1).
  */
-async function resolveParentContext(record: any): Promise<PostContext | null> {
+export async function resolveParentContext(record: any): Promise<PostContext | null> {
   const parentUri: string | undefined = record.reply?.parent?.uri;
   if (!parentUri) return null;
   return fetchPostContext(parentUri);
@@ -342,7 +344,7 @@ async function resolveParentContext(record: any): Promise<PostContext | null> {
 /**
  * Resolves quoted post context if the record embeds another post (Section 5.2).
  */
-async function resolveQuotedContext(record: any): Promise<PostContext | null> {
+export async function resolveQuotedContext(record: any): Promise<PostContext | null> {
   if (!record.embed) return null;
   const embed = record.embed;
   let quotedUri: string | undefined;
@@ -411,7 +413,7 @@ async function handleRepostOrLike(
         createdAt: targetRecord.createdAt || matchedAt,
         matchedAt,
         relevanceScore: 100,
-        relevanceExplanation: "AI filtering bypassed",
+        relevanceExplanation: "Bypassed filtering by configuration",
         matchRules,
         isDeleted: false,
         facets,
@@ -420,43 +422,21 @@ async function handleRepostOrLike(
         quotedContext
       });
     } else {
-      let evalResult;
-      try {
-        evalResult = await evaluatePost(
-          targetRecord.text || "",
-          targetHandle,
-          parentContext,
-          quotedContext,
-          matchRules
-        );
-      } catch (err: any) {
-        console.error("[Gemini Classification] Error calling Gemini API on resolved target:", err);
-        try {
-          logProcessingFailure("gemini_call", JSON.stringify(commit), err.message || String(err));
-        } catch (logErr) {
-          console.error("Failed to log gemini_call error in handleRepostOrLike", logErr);
-        }
-        return;
-      }
-      if (evalResult.isRelevant) {
-        await writePost({
-          uri: postUri,
-          cid: targetPost.cid || "",
-          authorDid: targetAuthorDid,
-          authorHandle: targetHandle,
-          text: targetRecord.text || "",
-          createdAt: targetRecord.createdAt || matchedAt,
-          matchedAt,
-          relevanceScore: evalResult.score,
-          relevanceExplanation: evalResult.reasoning,
-          matchRules,
-          isDeleted: false,
-          facets,
-          mediaEmbed,
-          parentContext,
-          quotedContext
-        });
-      }
+      queueForEvaluation({
+        uri: postUri,
+        cid: targetPost.cid || "",
+        authorDid: targetAuthorDid,
+        authorHandle: targetHandle,
+        text: targetRecord.text || "",
+        langs: targetRecord.langs || null,
+        facets,
+        mediaEmbed,
+        matchRules,
+        createdAt: targetRecord.createdAt || matchedAt,
+        matchedAt,
+        reply: targetRecord.reply || null,
+        embed: targetRecord.embed || null
+      });
     }
   } catch (err) {
     console.error(`Failed to resolve ${eventType} target post ${subjectUri}:`, err);
@@ -687,24 +667,24 @@ export async function handleCommit(msg: any, userDid: string): Promise<void> {
         const facets = parseFacets(record);
         const mediaEmbed = parseMediaEmbed(record, authorDid);
 
-        // Parent / quote context fetching (Section 5) — wrap in try-catch for context_fetch logging
-        let parentContext: PostContext | null = null;
-        let quotedContext: PostContext | null = null;
-        try {
-          parentContext = await resolveParentContext(record);
-          quotedContext = await resolveQuotedContext(record);
-        } catch (err: any) {
-          console.error("[Context Crawl] Error fetching parent/quoted post context:", err);
-          try {
-            logProcessingFailure("context_fetch", JSON.stringify(msg), err.message || String(err));
-          } catch (logErr) {
-            console.error("Failed to log context_fetch error", logErr);
-          }
-        }
-
         const aiEnabled = process.env.AI_FILTERING_ENABLED !== "false";
 
         if (!aiEnabled) {
+          // Parent / quote context fetching (Section 5) — wrap in try-catch for context_fetch logging
+          let parentContext: PostContext | null = null;
+          let quotedContext: PostContext | null = null;
+          try {
+            parentContext = await resolveParentContext(record);
+            quotedContext = await resolveQuotedContext(record);
+          } catch (err: any) {
+            console.error("[Context Crawl] Error fetching parent/quoted post context:", err);
+            try {
+              logProcessingFailure("context_fetch", JSON.stringify(msg), err.message || String(err));
+            } catch (logErr) {
+              console.error("Failed to log context_fetch error", logErr);
+            }
+          }
+
           await writePost({
             uri: postUri,
             cid: commit.cid,
@@ -714,7 +694,7 @@ export async function handleCommit(msg: any, userDid: string): Promise<void> {
             createdAt: record.createdAt || matchedAt,
             matchedAt,
             relevanceScore: 100,
-            relevanceExplanation: "AI filtering bypassed",
+            relevanceExplanation: "Bypassed filtering by configuration",
             matchRules,
             isDeleted: false,
             facets,
@@ -723,45 +703,28 @@ export async function handleCommit(msg: any, userDid: string): Promise<void> {
             quotedContext
           });
         } else {
-          // Gemini Call (Section 8.2) — wrap in try-catch for gemini_call logging
-          let evalResult;
-          try {
-            evalResult = await evaluatePost(record.text, handle, parentContext, quotedContext, matchRules);
-          } catch (err: any) {
-            console.error("[Gemini Classification] Error calling Gemini API:", err);
-            try {
-              logProcessingFailure("gemini_call", JSON.stringify(msg), err.message || String(err));
-            } catch (logErr) {
-              console.error("Failed to log gemini_call error", logErr);
-            }
-            return; // Exit post processing without writing post
-          }
-
-          if (evalResult.isRelevant) {
-            await writePost({
-              uri: postUri,
-              cid: commit.cid,
-              authorDid,
-              authorHandle: handle,
-              text: record.text,
-              createdAt: record.createdAt || matchedAt,
-              matchedAt,
-              relevanceScore: evalResult.score,
-              relevanceExplanation: evalResult.reasoning,
-              matchRules,
-              isDeleted: false,
-              facets,
-              mediaEmbed,
-              parentContext,
-              quotedContext
-            });
-          }
+          queueForEvaluation({
+            uri: postUri,
+            cid: commit.cid,
+            authorDid,
+            authorHandle: handle,
+            text: record.text,
+            langs: record.langs || null,
+            facets,
+            mediaEmbed,
+            matchRules,
+            createdAt: record.createdAt || matchedAt,
+            matchedAt,
+            reply: record.reply || null,
+            embed: record.embed || null
+          });
         }
       } else if (operation === "delete") {
         const existing = queryLocalPost(postUri);
         if (existing) {
           await softDeletePost(postUri);
         }
+        deleteFromEvaluationQueue(postUri);
       }
     } catch (err: any) {
       console.error("[Post Ingestion] General error processing post commit:", err);

@@ -12,11 +12,19 @@ import {
   setMockFetchAllFollows,
   queryLocalPost,
   queryOutboxItem,
-  queryProcessingFailures
+  queryProcessingFailures,
+  queueForEvaluation,
+  deleteFromEvaluationQueue,
+  getEvaluationQueueSize,
+  getEvaluationQueueBatch,
+  incrementEvaluationQueueRetry,
+  clearEvaluationQueue,
+  clearOutbox
 } from "./db";
 import { setMockEvaluator } from "./gemini";
-import { setMockDbHandlers, processOutbox, stopOutboxWorker, getPostId } from "./firestore";
+import { setMockDbHandlers, processOutbox, stopOutboxWorker, getPostId, setMockStatsHandler } from "./firestore";
 import { handleCommit } from "./jetstream";
+import { runBatchEvaluation, triggerHeartbeat } from "./batch_worker";
 
 // Test DB cleanup helper
 const DATA_DIR = path.resolve(__dirname, "../data");
@@ -72,6 +80,11 @@ async function runTests() {
     }
   );
 
+  let latestStats: any = null;
+  setMockStatsHandler(async (stats) => {
+    latestStats = stats;
+  });
+
   const normalMockEvaluator = async (
     text: string,
     handle: string,
@@ -122,6 +135,7 @@ async function runTests() {
   writtenPosts.length = 0;
   geminiCallCount = 0;
   await handleCommit(mockPostEvent, "did:plc:owner123");
+  await runBatchEvaluation();
   await processOutbox();
 
   assert(geminiCallCount === 1, "Should route post to Gemini evaluation because it matches keywords 'atproto' and 'pds'");
@@ -195,6 +209,7 @@ async function runTests() {
   writtenPosts.length = 0;
   geminiCallCount = 0;
   await handleCommit(bypassPostEvent, "did:plc:owner123");
+  await runBatchEvaluation();
   await processOutbox();
 
   assert(isFollowed("did:plc:vp7572o3uowvjscsps5u7e9") === true, "Author should be recognized as a follow relationship");
@@ -230,6 +245,7 @@ async function runTests() {
   writtenPosts.length = 0;
   geminiCallCount = 0;
   await handleCommit(nonEnglishPostEvent, "did:plc:owner123");
+  await runBatchEvaluation();
   await processOutbox();
 
   assert(geminiCallCount === 0, "Should immediately discard non-English post and NOT query Gemini");
@@ -253,6 +269,7 @@ async function runTests() {
 
   deletedPostUris.length = 0;
   await handleCommit(deleteEvent, "did:plc:owner123");
+  await runBatchEvaluation();
   await processOutbox();
 
   assert(deletedPostUris.length === 1, "Should propagate delete event");
@@ -268,6 +285,144 @@ async function runTests() {
   const localPostWithFeedback = queryLocalPost("at://did:plc:rpqw572o3uowvjscsps5u7e6/app.bsky.feed.post/3ks5z3a2jzk2c");
   assert(localPostWithFeedback?.feedback === "relevant", "SQLite post feedback should update to 'relevant'");
   assert(localPostWithFeedback?.feedback_at === "2026-07-03T12:00:00.000Z", "SQLite post feedback time should update");
+
+  // ----------------------------------------------------
+  // Scenario 2.6: Batch Processing, Capping, and Backlog Ordering
+  // ----------------------------------------------------
+  console.log("\nScenario 2.6: Batch Processing, Capping, and Backlog Ordering...");
+
+  clearEvaluationQueue();
+
+  for (let i = 1; i <= 150; i++) {
+    queueForEvaluation({
+      uri: `at://did:plc:author${i}/app.bsky.feed.post/post${i}`,
+      cid: `cid${i}`,
+      authorDid: `did:plc:author${i}`,
+      authorHandle: `author${i}`,
+      text: `Post number ${i} about rust`,
+      langs: ["en"],
+      facets: [],
+      mediaEmbed: {},
+      matchRules: ["keyword:rust"],
+      createdAt: new Date(Date.now() - (150 - i) * 1000).toISOString(),
+      matchedAt: new Date(Date.now() - (150 - i) * 1000).toISOString()
+    });
+  }
+
+  process.env.BATCH_EVAL_CAP = "100";
+  writtenPosts.length = 0;
+  geminiCallCount = 0;
+
+  await runBatchEvaluation();
+  await processOutbox();
+
+  assert(geminiCallCount === 100, "The worker pulls exactly 100 posts from evaluation_queue");
+  assert(writtenPosts.length === 100, "Should write 100 relevant posts to outbox");
+  
+  const hasPost50 = writtenPosts.some(p => p.uri.includes("post50"));
+  const hasPost51 = writtenPosts.some(p => p.uri.includes("post51"));
+  const hasPost150 = writtenPosts.some(p => p.uri.includes("post150"));
+  assert(!hasPost50, "Post 50 (older post) should NOT be processed");
+  assert(hasPost51 && hasPost150, "Post 51 and Post 150 (newer posts) should be processed");
+
+  const remainingSize = getEvaluationQueueSize();
+  assert(remainingSize === 50, "The 50 older posts remain in evaluation_queue");
+
+  clearEvaluationQueue();
+
+  // ----------------------------------------------------
+  // Scenario 2.7: Retry Failure Eviction
+  // ----------------------------------------------------
+  console.log("\nScenario 2.7: Retry Failure Eviction...");
+  clearEvaluationQueue();
+
+  queueForEvaluation({
+    uri: "at://did:plc:retryauthor/app.bsky.feed.post/post1",
+    cid: "cidretry1",
+    authorDid: "did:plc:retryauthor",
+    authorHandle: "retryauthor",
+    text: "Post with rust",
+    langs: ["en"],
+    facets: [],
+    mediaEmbed: {},
+    matchRules: ["keyword:rust"],
+    createdAt: new Date().toISOString(),
+    matchedAt: new Date().toISOString()
+  });
+
+  incrementEvaluationQueueRetry("at://did:plc:retryauthor/app.bsky.feed.post/post1");
+  incrementEvaluationQueueRetry("at://did:plc:retryauthor/app.bsky.feed.post/post1");
+  incrementEvaluationQueueRetry("at://did:plc:retryauthor/app.bsky.feed.post/post1");
+
+  setMockEvaluator(async () => {
+    throw new Error("Temporary Gemini Error");
+  });
+
+  await runBatchEvaluation();
+
+  const queueAfterRetry = getEvaluationQueueSize();
+  assert(queueAfterRetry === 0, "Because retry_count > 3, the post is deleted from evaluation_queue");
+
+  const retryFailures = queryProcessingFailures("gemini_call");
+  assert(retryFailures.length > 0 && retryFailures[0].error_message.includes("Temporary Gemini Error"), "An error entry is written to processing_failures with event_type = 'gemini_call'");
+
+  setMockEvaluator(normalMockEvaluator);
+
+  // ----------------------------------------------------
+  // Scenario 2.8: Backend Stats Publishing
+  // ----------------------------------------------------
+  console.log("\nScenario 2.8: Backend Stats Publishing...");
+  clearEvaluationQueue();
+  latestStats = null;
+
+  for (let i = 1; i <= 100; i++) {
+    const isRelevant = i <= 20;
+    queueForEvaluation({
+      uri: `at://did:plc:statsauthor${i}/app.bsky.feed.post/post${i}`,
+      cid: `cid${i}`,
+      authorDid: `did:plc:statsauthor${i}`,
+      authorHandle: `statsauthor${i}`,
+      text: isRelevant ? "Post about rust" : "Post about off-topic",
+      langs: ["en"],
+      facets: [],
+      mediaEmbed: {},
+      matchRules: [isRelevant ? "keyword:rust" : "keyword:off-topic"],
+      createdAt: new Date().toISOString(),
+      matchedAt: new Date().toISOString()
+    });
+  }
+
+  for (let i = 101; i <= 150; i++) {
+    queueForEvaluation({
+      uri: `at://did:plc:statsauthor${i}/app.bsky.feed.post/post${i}`,
+      cid: `cid${i}`,
+      authorDid: `did:plc:statsauthor${i}`,
+      authorHandle: `statsauthor${i}`,
+      text: "Post about rust",
+      langs: ["en"],
+      facets: [],
+      mediaEmbed: {},
+      matchRules: ["keyword:rust"],
+      createdAt: new Date().toISOString(),
+      matchedAt: new Date().toISOString()
+    });
+  }
+
+  process.env.BATCH_EVAL_CAP = "100";
+  writtenPosts.length = 0;
+
+  await runBatchEvaluation();
+
+  assert(latestStats !== null, "The /stats/backend document in Firestore is updated");
+  assert(latestStats.queueSize === 50, "queueSize matches remaining rows in evaluation_queue (50)");
+  assert(latestStats.lastBatchProcessedCount === 100, "lastBatchProcessedCount == 100");
+  assert(latestStats.lastBatchSuccessCount === 100, "lastBatchSuccessCount == 100");
+  assert(latestStats.lastBatchRelevantCount === 50, "lastBatchRelevantCount == 50");
+  assert(latestStats.backendStatus === "online", "backendStatus == 'online'");
+  assert(latestStats.lastActive !== undefined, "lastActive is updated with current timestamp");
+
+  delete process.env.BATCH_EVAL_CAP;
+  clearEvaluationQueue();
 
   // ----------------------------------------------------
   // Scenario 3.1: New Follow (By Owner)
@@ -320,6 +475,7 @@ async function runTests() {
   // Section 3: SQLite Outbox Queue Verification
   // ----------------------------------------------------
   console.log("\nSection 3: SQLite Outbox Queue Verification...");
+  clearOutbox();
 
   // Scenario 3.1: Outbox Insertion on Match
   console.log("Scenario 3.1: Outbox Insertion on Match...");
@@ -356,6 +512,7 @@ async function runTests() {
 
   // Ingest post
   await handleCommit(outboxMatchPost, "did:plc:owner123");
+  await runBatchEvaluation();
 
   const postUriHash = getPostId("at://did:plc:testoutbox123/app.bsky.feed.post/rkeyoutbox1");
   const outboxItem = queryOutboxItem(postUriHash);
@@ -484,6 +641,10 @@ async function runTests() {
   };
 
   await handleCommit(replyPostEvent, "did:plc:owner123");
+  await runBatchEvaluation();
+  await runBatchEvaluation();
+  await runBatchEvaluation();
+  await runBatchEvaluation();
 
   // Restore fetch
   global.fetch = originalFetch;
@@ -522,6 +683,10 @@ async function runTests() {
   };
 
   await handleCommit(errorPostEvent, "did:plc:owner123");
+  await runBatchEvaluation();
+  await runBatchEvaluation();
+  await runBatchEvaluation();
+  await runBatchEvaluation();
 
   // Restore normal mock evaluator
   setMockEvaluator(normalMockEvaluator);
@@ -595,6 +760,7 @@ async function runTests() {
   writtenPosts.length = 0;
   geminiCallCount = 0;
   await handleCommit(repostMsg, "did:plc:owner123");
+  await runBatchEvaluation();
   await processOutbox();
 
   // Restore fetch
@@ -727,6 +893,7 @@ async function runTests() {
   geminiCallCount = 0;
   
   await handleCommit(contextPostEvent, "did:plc:owner123");
+  await runBatchEvaluation();
   await processOutbox();
 
   // Restore fetch

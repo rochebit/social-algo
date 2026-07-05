@@ -3,6 +3,7 @@ import * as path from "path";
 import { initDb, hasFirstDegreeFollows, syncNetworkGraph } from "./db";
 import { initFirestore, startArchiverScheduler, startOutboxWorker } from "./firestore";
 import { startJetstream, startCursorPersistence } from "./jetstream";
+import { startBatchWorker } from "./batch_worker";
 
 // Load environment configurations
 dotenv.config();
@@ -53,6 +54,10 @@ async function main() {
   // Start Outbox Sync Worker (retries queued writes in background)
   console.log("Starting outbox sync worker...");
   startOutboxWorker();
+
+  // Start Batch Ingestion relevance evaluation worker
+  console.log("Starting batch evaluation worker...");
+  startBatchWorker();
 
   // 4. Start Cursor State Persistence (every 5 seconds)
   console.log("Starting cursor persistence worker...");

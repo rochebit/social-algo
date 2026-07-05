@@ -119,8 +119,9 @@ export async function evaluatePost(
   const prompt = constructUserPrompt(text, parentContext, quotedContext, matchRules);
 
   try {
+    const modelName = process.env.GEMINI_MODEL || "gemini-3.1-flash-lite";
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: modelName,
       contents: prompt,
       config: {
         systemInstruction: SYSTEM_INSTRUCTIONS,

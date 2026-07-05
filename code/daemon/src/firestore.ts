@@ -375,3 +375,32 @@ export function stopOutboxWorker(): void {
     syncTimeout = null;
   }
 }
+
+let mockStatsHandler: ((stats: any) => Promise<void>) | null = null;
+
+export function setMockStatsHandler(fn: typeof mockStatsHandler): void {
+  mockStatsHandler = fn;
+}
+
+export async function publishStats(stats: {
+  lastActive: string;
+  lastBatchTime: string;
+  queueSize: number;
+  geminiFailureCount24h: number;
+  lastBatchProcessedCount: number;
+  lastBatchSuccessCount: number;
+  lastBatchRelevantCount: number;
+  lastError: string | null;
+  backendStatus: string;
+}): Promise<void> {
+  if (mockStatsHandler) {
+    await mockStatsHandler(stats);
+    return;
+  }
+  try {
+    const db = initFirestore();
+    await db.collection("stats").doc("backend").set(stats, { merge: true });
+  } catch (err) {
+    console.error("Failed to publish backend stats to Firestore:", err);
+  }
+}
