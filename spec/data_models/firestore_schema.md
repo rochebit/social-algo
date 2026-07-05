@@ -64,7 +64,8 @@ We utilize two primary collections and a statistics collection containing a sing
     ],
     "externalLink": null,
     "video": null
-  }
+  },
+  "version": "v1.0.0"
 }
 ```
 
@@ -89,6 +90,7 @@ We utilize two primary collections and a statistics collection containing a sing
 | 1.1.4.15 | `quotedContext` | object or null | Context of the post quoted/embedded. Null if not a quote. |
 | 1.1.4.16 | `facets` | array of objects | Extracted rich-text features. Each contains byte range (`start`, `end`) and type specifics (`uri` or `tag`). |
 | 1.1.4.17 | `mediaEmbed` | object | Media assets associated with the post. Contains sub-objects `images` (array), `externalLink` (object), and `video` (object). |
+| 1.1.4.18 | `version` | string | The version tag of the system that processed this post. |
 
 ---
 
@@ -106,6 +108,7 @@ We utilize two primary collections and a statistics collection containing a sing
 | 1.2.3.4 | `feedback` | string | The feedback rating provided by the owner (`"negative"`, `"neutral"`, `"positive"`, `"extra_positive"`). |
 | 1.2.3.5 | `submittedAt` | string (ISO-8601 UTC) | Timestamp of when the user submitted the feedback rating. |
 | 1.2.3.6 | `userEmail` | string | Whitelisted email address of the administrator who submitted the feedback. |
+| 1.2.3.7 | `version` | string | The version tag of the frontend/system active at the time the feedback was logged. |
 
 ---
 
@@ -124,7 +127,17 @@ We utilize two primary collections and a statistics collection containing a sing
   "lastBatchSuccessCount": 45,
   "lastBatchRelevantCount": 3,
   "lastError": null,
-  "backendStatus": "online"
+  "backendStatus": "online",
+  "firehoseCount1h": 1200,
+  "firehoseCount24h": 28000,
+  "passedStage1Count1h": 150,
+  "passedStage1Count24h": 3200,
+  "passedStage2Count1h": 10,
+  "passedStage2Count24h": 180,
+  "lastFirehosePostAt": "2026-07-05T10:54:58.123Z",
+  "lastPassedStage1At": "2026-07-05T10:54:30.456Z",
+  "lastPassedStage2At": "2026-07-05T10:50:00.000Z",
+  "version": "v1.0.0"
 }
 ```
 * 1.3.4. **Document Fields Schema:**
@@ -140,6 +153,41 @@ We utilize two primary collections and a statistics collection containing a sing
 | 1.3.4.7 | `lastBatchRelevantCount` | number | Number of posts classified as relevant and pushed to Firestore in the last batch run. |
 | 1.3.4.8 | `lastError` | string or null | Error details of the last logged processing failure, or null if none. |
 | 1.3.4.9 | `backendStatus` | string | Hardcoded status representing backend presence (`"online"`). |
+| 1.3.4.10 | `firehoseCount1h` & `firehoseCount24h` | number | Ingested post counts from the Jetstream firehose in the last 1 and 24 hours. |
+| 1.3.4.11 | `passedStage1Count1h` & `passedStage1Count24h` | number | Count of posts passing Stage 1 keyword/network filters in the last 1 and 24 hours. |
+| 1.3.4.12 | `passedStage2Count1h` & `passedStage2Count24h` | number | Count of posts evaluated as relevant by Gemini in the last 1 and 24 hours. |
+| 1.3.4.13 | `lastFirehosePostAt` | string (ISO-8601 UTC) or null | Timestamp of the last post message received from the firehose. |
+| 1.3.4.14 | `lastPassedStage1At` | string (ISO-8601 UTC) or null | Timestamp of the last post that successfully passed Stage 1 filtering. |
+| 1.3.4.15 | `lastPassedStage2At` | string (ISO-8601 UTC) or null | Timestamp of the last post that successfully passed Gemini Stage 2 evaluation. |
+| 1.3.4.16 | `version` | string | The active system version of the backend daemon. |
+
+### 1.4 `deployments` Collection (Deployment Shift Log)
+
+* 1.4.1. **Path:** `/deployments/{deploymentId}`
+* 1.4.2. **Document ID (`deploymentId`):** Unique generated string key (e.g. `{version}_{timestamp}`).
+* 1.4.3. **Document Schema JSON Model:**
+```json
+{
+  "version": "v1.0.0",
+  "deployedAt": "2026-07-05T14:00:00.000Z",
+  "environment": "backend",
+  "model": "gemini-3.1-flash-lite",
+  "batchIntervalSeconds": 300,
+  "batchEvalCap": 100,
+  "aiFilteringEnabled": true
+}
+```
+* 1.4.4. **Document Fields Schema:**
+
+| ID | Field Name | Type | Description |
+|---|---|---|---|
+| 1.4.4.1 | `version` | string | The version tag associated with this deployment. |
+| 1.4.4.2 | `deployedAt` | string (ISO-8601 UTC) | Timestamp of when the version deployment event was recorded. |
+| 1.4.4.3 | `environment` | string | The active system layer shifted (`"backend"` or `"frontend"`). |
+| 1.4.4.4 | `model` | string | The active Gemini model name configured for this backend shift. |
+| 1.4.4.5 | `batchIntervalSeconds` | number | The batch run interval seconds active during this shift. |
+| 1.4.4.6 | `batchEvalCap` | number | The cap on the evaluated post count per batch. |
+| 1.4.4.7 | `aiFilteringEnabled` | boolean | Indicates if Gemini AI classification was active. |
 
 ---
 
@@ -189,6 +237,11 @@ service cloud.firestore {
     match /stats/{docId} {
       allow read, write: if isOwner();
     }
+
+    // Rule for deployments
+    match /deployments/{deploymentId} {
+      allow read, write: if isOwner();
+    }
   }
 }
 ```
@@ -201,6 +254,7 @@ service cloud.firestore {
 * 3.3. **`posts` Collection Path Access:** Allow read/write access on `/posts/{postId}` if and only if `isOwner()` is true.
 * 3.4. **`feedback_logs` Collection Path Access:** Allow read/write access on `/feedback_logs/{feedbackId}` if and only if `isOwner()` is true.
 * 3.5. **`stats` Collection Path Access:** Allow read/write access on `/stats/{docId}` if and only if `isOwner()` is true.
+* 3.6. **`deployments` Collection Path Access:** Allow read/write access on `/deployments/{deploymentId}` if and only if `isOwner()` is true.
 
 > [!IMPORTANT]
 > The developer/agent implementing this deployment must replace `OWNER_EMAIL_PLACEHOLDER` with the owner's actual Google Account email address during the Firebase deploy step.

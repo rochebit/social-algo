@@ -312,6 +312,34 @@ These scenarios verify client-side CSS layouts, state transitions, PWA metadata,
   - 7.9.4.2. **Assertion:** The modal correctly displays the parsed metadata from `/stats/backend` (heartbeat, queue size, failures count, batch stats, and recent error text).
   - 7.9.4.3. **Assertion:** Clicking the backdrop closes the modal, removing `#backend-status-modal` from the active viewport view.
 
+### 7.10 Throughput Metrics & Database Pruning Verification
+* 7.10.1. **Metrics Aggregation Test:** Mock 100 entries in the SQLite `metrics_log` table with timestamps spread across the last 30 hours:
+  - 7.10.1.1. Case A: 50 events logged in the last 45 minutes.
+  - 7.10.1.2. Case B: 30 events logged 5 hours ago.
+  - 7.10.1.3. Case C: 20 events logged 26 hours ago.
+* 7.10.2. **Assertions:**
+  - 7.10.2.1. Verify that the batch worker aggregates exactly 50 events for the 1-hour metrics window.
+  - 7.10.2.2. Verify that the batch worker aggregates exactly 80 events for the 24-hour metrics window.
+  - 7.10.2.3. Verify that the pruning query runs and successfully deletes the 20 events older than 24 hours (Case C) from the SQLite database.
+  - 7.10.2.4. Verify that `/stats/backend` in Firestore is updated with the correct 1-hour and 24-hour throughput values.
+
+### 7.11 User Engagement Signal Deduplication & False Negative Capture
+* 7.11.1. **Test Action 1 (User Action Capture):** Inject a Jetstream write event for `app.bsky.feed.like` created by `USER_DID` targeting a post URI not yet present in Firestore.
+  - 7.11.1.1. **Assertion:** Verify that the daemon resolves the post via AppView XRPC.
+  - 7.11.1.2. **Assertion:** Verify that the post is written to Firestore with `feedback = "interacted"` and `version` matching the current backend version.
+  - 7.11.1.3. **Assertion:** Verify that this post does not appear in the unreviewed frontend feed due to the `feedback` attribute not being null.
+* 7.11.2. **Test Action 2 (Existing Post Engagement):** Inject a Jetstream user engagement event targeting an existing Firestore post that has a `null` feedback rating.
+  - 7.11.2.1. **Assertion:** Verify that the document's feedback rating is updated to `"interacted"`.
+  - 7.11.2.2. **Assertion:** Verify that the post is immediately hidden from the feed timeline.
+
+### 7.12 Version & Deployment Shift Verification
+* 7.12.1. **Test Action 1 (Backend Version Tag):** Query the `/posts` collection in Firestore.
+  - 7.12.1.1. **Assertion:** Assert that every post written contains a `version` attribute matching the active environment config version (e.g. `"v1.0.0"`).
+* 7.12.2. **Test Action 2 (Feedback Log Version Tag):** Submit a feedback rating in the frontend app.
+  - 7.12.2.1. **Assertion:** Assert that the generated `feedback_logs` entry contains a `version` attribute matching the frontend build version.
+* 7.12.3. **Test Action 3 (Startup Deployment Log):** Change the `SYSTEM_VERSION` env key on the backend to `"v1.1.0"` and restart the daemon.
+  - 7.12.3.1. **Assertion:** Verify that a new document is written to the Firestore `/deployments` collection containing `"version": "v1.1.0"` and the active parameter configurations.
+
 ---
 
 ## 8. Implementing Agent Verification & Testing Guidelines

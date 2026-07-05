@@ -130,21 +130,31 @@ The top navigation area is minimized to a compact **Header** and an interactive 
     - 4.3.2.6.1. Link to **Feed (`/feed`)** appended with the real-time unreviewed counter: `Feed ({totalUnreviewed})`.
     - 4.3.2.6.2. Link to **Archive (`/archive`)**.
   - 4.3.2.7. **Backend Stats Summary Block (`#backend-stats-panel`):** A visually structured card rendering real-time fields from Firestore `/stats/backend`:
-    - 4.3.2.7.1. **Queue Backlog Size:** Rendered text: `Queue: {queueSize} pending`.
+    - 4.3.2.7.1. **Queue Backlog Size:** Rendered text: `Queue: {queueSize} pending | Version: {version}`.
     - 4.3.2.7.2. **Gemini 24h Failures:** Rendered text: `Gemini Fails (24h): {geminiFailureCount24h}`.
     - 4.3.2.7.3. **Last Batch Summary:** Rendered text: `Last Batch: {relativeTime} ({lastBatchProcessedCount} posts processed, {lastBatchRelevantCount} matched)`.
-    - 4.3.2.7.4. **Last Error Message:** If `lastError` is not null, display it inside a small red-tinted alert block with horizontal scrolling for long stack traces.
+    - 4.3.2.7.4. **Throughput Summary:** Rendered text: `Firehose Ingested: {firehoseCount1h} (1h) / {firehoseCount24h} (24h) | Stage 1 Matches: {passedStage1Count1h} (1h) / {passedStage1Count24h} (24h) | Gemini Matches: {passedStage2Count1h} (1h) / {passedStage2Count24h} (24h)`.
+    - 4.3.2.7.5. **Activity Times:** Rendered text: `Last Firehose: {lastFirehoseRelativeTime} | Last Pre-Filter: {lastPassedStage1RelativeTime} | Last Gemini Match: {lastPassedStage2RelativeTime}`.
+    - 4.3.2.7.6. **Last Error Message:** If `lastError` is not null, display it inside a small red-tinted alert block with horizontal scrolling for long stack traces.
 
 ### 4.4 Backend Status Details Modal (`#backend-status-modal`)
 When the owner clicks the `#backend-status-dot` status indicator dot in the compact header, the application must display a modal overlay rendering the detailed telemetry from `/stats/backend` in Firestore:
 * 4.4.1. **Visual Styling:** Frosted glassmorphism layout matching the design tokens (Section 8.1.2) with a dark semi-transparent overlay backdrop (`#modal-backdrop`). Centered on screen.
 * 4.4.2. **Metrics Displayed:**
-  - 4.4.2.1. **Status Header:** Displays status title (e.g., "Backend Status: ONLINE" or "OFFLINE") accompanied by the color-coded status dot.
+  - 4.4.2.1. **Status Header:** Displays status title (e.g., "Backend Status: ONLINE" or "OFFLINE") accompanied by the color-coded status dot and version: "Version: {version}".
   - 4.4.2.2. **Active Heartbeat:** Exact ISO timestamp of the last active signal and relative time duration since then (e.g., "Last Active: 2026-07-05T12:00:00Z (2m ago)").
   - 4.4.2.3. **Queue Status:** Backlog count: "Queue Backlog: {queueSize} posts pending evaluation in SQLite".
   - 4.4.2.4. **Gemini Failures (24h):** Error count: "Gemini API Failures (24h): {geminiFailureCount24h}".
   - 4.4.2.5. **Last Batch Telemetry:** Detailed metrics of the last batch processing run: "Last Batch Run: Completed at {lastBatchTime}. Selected {lastBatchProcessedCount} posts. Classified {lastBatchSuccessCount} successfully, finding {lastBatchRelevantCount} relevant posts."
-  - 4.4.2.6. **Recent Error Alert Block:** If `lastError` is not null, display a warning card with the full error text. Provide a "Copy Error" button next to it.
+  - 4.4.2.6. **Throughput Statistics Table:** Renders a 3-row grid showing 1-hour and 24-hour counts:
+    - Row 1: Firehose Ingested: `{firehoseCount1h}` (1h) | `{firehoseCount24h}` (24h)
+    - Row 2: Pre-Filter Matches: `{passedStage1Count1h}` (1h) | `{passedStage1Count24h}` (24h)
+    - Row 3: Gemini Relevant Matches: `{passedStage2Count1h}` (1h) | `{passedStage2Count24h}` (24h)
+  - 4.4.2.7. **Stage Activity Timestamps:** Shows relative times elapsed since the last post successfully processed each stage:
+    - Ingest Activity: `{lastFirehoseRelativeTime}` (e.g., "5s ago")
+    - Pre-Filter Activity: `{lastPassedStage1RelativeTime}` (e.g., "1m ago")
+    - Gemini Match Activity: `{lastPassedStage2RelativeTime}` (e.g., "4m ago")
+  - 4.4.2.8. **Recent Error Alert Block:** If `lastError` is not null, display a warning card with the full error text. Provide a "Copy Error" button next to it.
 * 4.4.3. **Closing Actions:** The modal must close immediately if the user clicks a dedicated "Close" (`x`) button, clicks the backdrop overlay (`#modal-backdrop`), or presses the `Escape` key.
 
 ---

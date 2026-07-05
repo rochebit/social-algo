@@ -118,6 +118,7 @@ Create a `.env` file in the daemon directory on the home server with the followi
 * 2.2.5. **`GEMINI_MODEL`:** Optional. Model identifier (defaults to `"gemini-3.1-flash-lite"`).
 * 2.2.6. **`BATCH_INTERVAL_SECONDS`:** Optional. Execution interval for the batch worker (defaults to `300`).
 * 2.2.7. **`BATCH_EVAL_CAP`:** Optional. Capped maximum post evaluations per batch run (defaults to `100`).
+* 2.2.8. **`SYSTEM_VERSION`:** Optional. Version tag describing the active deployment (defaults to `"v1.0.0"`).
 
 ### 2.3 Containerized Process Management (Docker Compose)
 We specify a Docker container deployment to encapsulate runtime environments and guarantee zero-downtime restarts.

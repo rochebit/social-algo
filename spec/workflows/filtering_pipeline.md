@@ -17,6 +17,7 @@ The Home Server daemon loads configuration parameters from a local environment f
 | 1.5 | **`GEMINI_MODEL`** | string | `"gemini-3.1-flash-lite"` | The Gemini model identifier used for relevance evaluation. |
 | 1.6 | **`BATCH_INTERVAL_SECONDS`** | integer | `300` | Frequency of batch evaluation runs in seconds (default: 5 minutes / 300 seconds). |
 | 1.7 | **`BATCH_EVAL_CAP`** | integer | `100` | Maximum number of posts evaluated in a single batch run. |
+| 1.8 | **`SYSTEM_VERSION`** | string | `"v1.0.0"` | The version tag of the active deployment. |
 
 ---
 
@@ -45,7 +46,8 @@ The Home Server daemon maintains a persistent WebSocket connection to subscribe 
 ### 2.3 Event Parsing & Operation Routing
 For every message received, the daemon checks the collection type and routes the payload:
 * 2.3.1. **`app.bsky.feed.post` Collections:**
-  - 2.3.1.1. **Create Operations (`commit.operation == "create"`):** Route to **Section 3: Stage 1: Rule-Based & Network Pre-Filtering**. If the post passes Stage 1, extract parsed rich text facets and media embeds (Section 7), and insert the post into the SQLite `evaluation_queue` table (Section 4.1.4) for later batch evaluation.
+  - 2.3.1.0. **Global Telemetry Update:** When any post event arrives (regardless of author or filters), immediately write an entry into the SQLite `metrics_log` table: `INSERT INTO metrics_log (event_type, created_at) VALUES ('firehose_received', '{CURRENT_TIMESTAMP}');` and update the in-memory timestamp variable `lastFirehosePostAt` to the current time.
+  - 2.3.1.1. **Create Operations (`commit.operation == "create"`):** Check if the event author is `USER_DID`. If it matches, route to **Section 6.3: User Engagement Signals (False Negative Capture)**. Otherwise, route to **Section 3: Stage 1: Rule-Based & Network Pre-Filtering**. If the post passes Stage 1, extract parsed rich text facets and media embeds (Section 7), and insert the post into the SQLite `evaluation_queue` table (Section 4.1.4) for later batch evaluation.
   - 2.3.1.2. **Delete Operations (`commit.operation == "delete"`):** Construct the post URI (`at://{did}/{collection}/{rkey}`), calculate the Firestore document ID using the rule in section 2.2.2, write a delete action to the local outbox, and also delete the post from `evaluation_queue` if it is still pending evaluation.
 * 2.3.2. **`app.bsky.graph.follow` Collections:**
   - 2.3.2.1. Route to **Section 4.3: Real-Time Firehose Syncing (Jetstream events)**.
@@ -59,6 +61,10 @@ For every message received, the daemon checks the collection type and routes the
 ## 3. Stage 1: Rule-Based & Network Pre-Filtering
 
 To minimize LLM token usage and latency, posts must pass a rule-based pre-filter.
+
+Whenever a post successfully passes Stage 1 (either via network bypass, keyword match, or curated whitelist), the daemon must immediately write an entry into the SQLite `metrics_log` table:
+`INSERT INTO metrics_log (event_type, created_at) VALUES ('passed_stage1', '{CURRENT_TIMESTAMP}');`
+and update the in-memory timestamp variable `lastPassedStage1At` to the current time.
 
 ### 3.1 Language Gate (Preliminary Check)
 * 3.1.1. **Rule:** Check the post's `langs` array (if present in the Jetstream record).
@@ -181,6 +187,15 @@ CREATE TABLE evaluation_queue (
     matched_at TEXT NOT NULL       -- ISO-8601 UTC string (ingestion time)
 );
 ```
+* 4.1.5. **`metrics_log` Table & Index:**
+```sql
+CREATE TABLE metrics_log (
+    event_type TEXT NOT NULL,      -- 'firehose_received', 'passed_stage1', 'passed_stage2'
+    created_at TEXT NOT NULL       -- ISO-8601 UTC string (event timestamp)
+);
+
+CREATE INDEX idx_metrics_created_at ON metrics_log(created_at);
+```
 
 ### 4.2 Startup Sync Logic
 * 4.2.1. **Sync check:** On initial startup (or if the database is unpopulated):
@@ -237,6 +252,18 @@ When someone you follow likes or reposts (boosts) a post, that target post is re
 * 6.2.2. **Parsing:** Extract the post contents (text, author DID, author handle, created timestamp, facets, and media embeds).
 * 6.2.3. **Match Rule Logging:** Add the string `"repost:{actorHandle}"` or `"like:{actorHandle}"` to the post's `matchRules` metadata array.
 * 6.2.4. **Routing:** Insert the resolved post payload (including text, author DID, author handle, created timestamp, facets, media embeds, and `matchRules` array) directly into the SQLite `evaluation_queue` table (Section 4.1.4) for batch evaluation.
+
+### 6.3 User Engagement Signals (False Negative Capture)
+To prevent posts that the user has already engaged with (made, liked, reposted, or replied to) from showing up as unrated cards in their feed, while still tracking them to analyze classifier omissions (false negatives), the daemon implements the following capture rules:
+* 6.3.1. **Engagement Detection:** The daemon monitors the Jetstream consumer for operations where `did == USER_DID` (indicating actions by the owner):
+  - 6.3.1.1. **User Posts and Replies (`app.bsky.feed.post` create):** Extract the post's URI. If it contains a `reply` parent, extract the parent URI (and quote URI if present) as well.
+  - 6.3.1.2. **User Likes and Reposts (`app.bsky.feed.like` and `app.bsky.feed.repost` create):** Extract the target post's URI (`subject.uri`).
+* 6.3.2. **Resolution & Direct Ingest (No Re-Showing):** For each target URI resolved under Section 6.3.1:
+  - 6.3.2.1. Check if the post already exists in Firestore (via Document ID hash). If it exists and `feedback` is not null, do nothing. If `feedback` is null, proceed to update it.
+  - 6.3.2.2. If the post is not in Firestore, fetch its full contents from the AppView `getPosts` endpoint.
+  - 6.3.2.3. Mark the post's metadata: set `matchRules = ["user_engagement_signal"]`, and include `version = SYSTEM_VERSION` representing the active version.
+  - 6.3.2.4. Write `feedback = "interacted"` and `feedbackAt = current_timestamp` in the Firestore document payload.
+  - 6.3.2.5. Generate the local outbox transaction and insert the record into SQLite `posts_outbox` table (action = 'write', status = 'pending') directly, bypassing the `evaluation_queue` and the Gemini API classification. Because `feedback` is set to `"interacted"`, it automatically hides the post from the Feed view (`feedback == null` query constraint) while persisting it for analysis.
 
 ---
 
@@ -336,14 +363,16 @@ graph TD
   - 8.2.4.3. **Single API Evaluation Call (Hard Limit Constraint):** To strictly enforce that Gemini is called at most once per 5 minutes, the worker must group all selected posts (up to `BATCH_EVAL_CAP`) and evaluate them in a **single Gemini API call**. The worker constructs a single user prompt containing the array of posts (formatted per the User Prompt Template in Section 8.2.6), sends it to the Gemini API, and expects a single JSON array of classification results matching the JSON Output Schema (Section 8.2.3).
   - 8.2.4.4. **Outcome Routing:** Upon receiving the JSON array response:
     - 8.2.4.4.1. Iterate through the items in the returned JSON array. Match each classification result to its original queued post using the `uri` field.
-    - 8.2.4.4.2. For each post where `isRelevant == true`, generate the Firestore payload structure (incorporating the parsed media embeds, facets, contexts, score, explanation, and matched rules) and insert a row into the SQLite `posts_outbox` table with `action = 'write'`, `status = 'pending'`.
+    - 8.2.4.4.2. For each post where `isRelevant == true`, generate the Firestore payload structure (incorporating the parsed media embeds, facets, contexts, score, explanation, and matched rules, along with `version = SYSTEM_VERSION`) and insert a row into the SQLite `posts_outbox` table with `action = 'write'`, `status = 'pending'`. Immediately write a metrics entry: `INSERT INTO metrics_log (event_type, created_at) VALUES ('passed_stage2', '{CURRENT_TIMESTAMP}');` and update the local variable `lastPassedStage2At` to the current time.
     - 8.2.4.4.3. Delete all successfully evaluated posts from `evaluation_queue` (by URI).
   - 8.2.4.5. **Batch Error & Retry Handling:** If the single Gemini API call fails (due to connection timeout, rate limits, API outage, or JSON array schema mismatch):
     - 8.2.4.5.1. Increment the `retry_count` for all posts included in that batch within the `evaluation_queue` table.
     - 8.2.4.5.2. For any post in the batch where `retry_count > 3`, log a failure entry to `processing_failures` with `event_type = 'gemini_call'` and delete it from `evaluation_queue`.
     - 8.2.4.5.3. For posts where `retry_count <= 3`, keep them in `evaluation_queue` to be processed again during the next batch run.
 
-* 8.2.5. **Statistics Publishing:** Immediately after completing each batch run, and also on a recurring heartbeat timer every 60 seconds, the daemon must update a single statistics document in Cloud Firestore at the path `/stats/backend`. The stats document must contain:
+* 8.2.5. **Statistics Publishing:** Immediately after completing each batch run (and refreshed at least every 5 minutes), and also on a recurring heartbeat timer every 60 seconds, the daemon must update a single statistics document in Cloud Firestore at the path `/stats/backend`. During each batch execution, the daemon must aggregate metrics from `metrics_log` and prune expired records:
+  - 8.2.5.0.1. **Pruning Query:** Run `DELETE FROM metrics_log WHERE created_at < datetime('now', '-24 hours');` to prevent infinite table growth.
+  - 8.2.5.0.2. **Aggregation Queries:** Calculate counts for the last 1 hour (`datetime('now', '-1 hour')`) and 24 hours (`datetime('now', '-24 hours')`) for each of the three event types (`firehose_received`, `passed_stage1`, `passed_stage2`).
   - 8.2.5.1. `lastActive`: string (ISO-8601 UTC timestamp of the latest heartbeat or update).
   - 8.2.5.2. `lastBatchTime`: string (ISO-8601 UTC timestamp of the last completed batch processing run).
   - 8.2.5.3. `queueSize`: integer (count of rows currently remaining in SQLite `evaluation_queue` table).
@@ -353,6 +382,30 @@ graph TD
   - 8.2.5.7. `lastBatchRelevantCount`: integer (number of posts from the batch that were found relevant and written to the outbox).
   - 8.2.5.8. `lastError`: string or null (the error message of the most recent failure in the `processing_failures` table, or `null` if no failures).
   - 8.2.5.9. `backendStatus`: string (`"online"`).
+  - 8.2.5.10. **Throughput Counters:**
+    - 8.2.5.10.1. `firehoseCount1h` & `firehoseCount24h`: integer (count of posts ingested from the firehose).
+    - 8.2.5.10.2. `passedStage1Count1h` & `passedStage1Count24h`: integer (count of posts passing Stage 1 pre-filtering).
+    - 8.2.5.10.3. `passedStage2Count1h` & `passedStage2Count24h`: integer (count of posts passing Gemini relevance).
+  - 8.2.5.11. **Activity Timestamps:**
+    - 8.2.5.11.1. `lastFirehosePostAt`: string or null (ISO-8601 UTC timestamp of when the last post was received from the firehose).
+    - 8.2.5.11.2. `lastPassedStage1At`: string or null (ISO-8601 UTC timestamp of when the last post passed Stage 1).
+    - 8.2.5.11.3. `lastPassedStage2At`: string or null (ISO-8601 UTC timestamp of when the last post passed Stage 2).
+  - 8.2.5.12. `version`: string (the current `SYSTEM_VERSION` of the backend daemon).
+
+* 8.2.6. **Startup Deployment Shift Tracker:** On backend startup, the daemon must query the Firestore `/deployments` collection for the latest deployment document (sorted by `deployedAt` DESC):
+  - 8.2.6.1. If the latest deployment document has a different `version` than the current `SYSTEM_VERSION` OR if configuration settings (`GEMINI_MODEL`, `BATCH_INTERVAL_SECONDS`, `BATCH_EVAL_CAP`) differ from the values stored in the document:
+    - 8.2.6.1.1. Write a new document to `/deployments` with a generated ID (e.g. `{version}_{timestamp}`):
+      ```json
+      {
+        "version": "v1.0.0", // matches SYSTEM_VERSION
+        "deployedAt": "2026-07-05T14:00:00.000Z",
+        "environment": "backend",
+        "model": "gemini-3.1-flash-lite",
+        "batchIntervalSeconds": 300,
+        "batchEvalCap": 100,
+        "aiFilteringEnabled": true
+      }
+      ```
 
 * 8.3. **System Prompt:** The following exact text must be sent as the system instruction to the Gemini model. It must not be modified by the implementing agent.
 
