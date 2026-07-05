@@ -7,7 +7,7 @@ import {
   getLastProcessingError,
   logProcessingFailure
 } from "./db";
-import { evaluatePost } from "./gemini";
+import { evaluatePost, isMockEvaluatorActive } from "./gemini";
 import { writePost, publishStats } from "./firestore";
 import { resolveParentContext, resolveQuotedContext } from "./jetstream";
 
@@ -92,6 +92,11 @@ export async function runBatchEvaluation(): Promise<void> {
             logProcessingFailure("gemini_call", JSON.stringify({ uri: item.uri, cid: item.cid, reply: item.reply ? JSON.parse(item.reply) : undefined, embed: item.embed ? JSON.parse(item.embed) : undefined }), err.message || String(err));
             deleteFromEvaluationQueue(item.uri);
           }
+
+          // Delay for 4.2 seconds to respect free tier rate limit (max 15 RPM)
+          if (process.env.NODE_ENV !== "test" && !isMockEvaluatorActive()) {
+            await new Promise((resolve) => setTimeout(resolve, 4200));
+          }
           continue; // Go to next post in batch
         }
 
@@ -130,6 +135,11 @@ export async function runBatchEvaluation(): Promise<void> {
           console.error(`[Batch Worker] Error writing evaluated post to outbox/Firestore:`, err);
           // Delete it so it's not stuck
           deleteFromEvaluationQueue(item.uri);
+        }
+
+        // Delay for 4.2 seconds to respect free tier rate limit (max 15 RPM)
+        if (process.env.NODE_ENV !== "test" && !isMockEvaluatorActive()) {
+          await new Promise((resolve) => setTimeout(resolve, 4200));
         }
       }
     }

@@ -93,6 +93,10 @@ export function setMockEvaluator(fn: typeof mockEvaluator) {
   mockEvaluator = fn;
 }
 
+export function isMockEvaluatorActive(): boolean {
+  return mockEvaluator !== null;
+}
+
 function getAiClient(): GoogleGenAI {
   if (!aiClient) {
     const apiKey = process.env.GEMINI_API_KEY;
