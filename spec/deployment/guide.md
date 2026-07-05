@@ -115,6 +115,9 @@ Create a `.env` file in the daemon directory on the home server with the followi
 * 2.2.2. **`GEMINI_API_KEY`:** Your active Gemini API key.
 * 2.2.3. **`FIREBASE_PROJECT_ID`:** Your active Firebase Project ID.
 * 2.2.4. **`GOOGLE_APPLICATION_CREDENTIALS`:** Set to absolute path `/app/firebase-credentials.json` inside the container context.
+* 2.2.5. **`GEMINI_MODEL`:** Optional. Model identifier (defaults to `"gemini-3.1-flash-lite"`).
+* 2.2.6. **`BATCH_INTERVAL_SECONDS`:** Optional. Execution interval for the batch worker (defaults to `300`).
+* 2.2.7. **`BATCH_EVAL_CAP`:** Optional. Capped maximum post evaluations per batch run (defaults to `100`).
 
 ### 2.3 Containerized Process Management (Docker Compose)
 We specify a Docker container deployment to encapsulate runtime environments and guarantee zero-downtime restarts.

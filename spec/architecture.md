@@ -15,45 +15,53 @@ graph TB
         PDS[User's PDS / Bluesky API<br>https://bsky.social]
         BlueskyApp[Bluesky App/Web client<br>https://bsky.app]
     end
-
+ 
     subgraph Home Server (Private Local Network)
         Daemon[Ingestion & Filtering Daemon]
+        BatchWorker[5-Min Batch Evaluator<br>Gemini 3.1 Flash-Lite]
         RulesConfig[Local Rules Config<br>keywords, whitelist]
         GraphDB[(Local Database<br>SQLite)]
         OutboxWorker[Outbox Sync Worker]
     end
-
+ 
     subgraph Firebase Cloud Environment
         Firestore[(Cloud Firestore Database)]
         Hosting[Firebase Hosting<br>Static Web Dashboard]
         Auth[Firebase Auth<br>Google Sign-In]
     end
-
+ 
     subgraph Client Browser
-        DashboardApp[Single Page App UI]
+        DashboardApp[Single Page App UI<br>with compact side drawer]
         OAuthSession[ATProto OAuth Tokens<br>LocalStorage]
     end
-
+ 
     %% Ingestion Flow
     Jetstream -- JSON Stream posts/follows/reposts/likes --> Daemon
     Daemon -- Read Rule Settings --> RulesConfig
     Daemon -- Query/Sync Graph --> GraphDB
-    Daemon -- Write Matched Posts --> GraphDB
-
+    Daemon -- Queue Matched Posts --> GraphDB
+ 
+    %% Batch Worker Flow
+    BatchWorker -- 1. Pull Batch --> GraphDB
+    BatchWorker -- 2. Query Gemini --> BatchWorker
+    BatchWorker -- 3. Write Outbox --> GraphDB
+    BatchWorker -- 4. Publish Stats --> Firestore
+ 
     %% Outbox Sync
     OutboxWorker -- Read Queue --> GraphDB
     OutboxWorker -- Push to Cloud --> Firestore
-
+ 
     %% UI and Firestore Sync
     DashboardApp -- Listen/Query Posts --> Firestore
+    DashboardApp -- Listen Backend Stats --> Firestore
     DashboardApp -- Write Thumbs Up/Down Feedback --> Firestore
     DashboardApp -- Authenticate Email --> Auth
-
+ 
     %% OAuth & Direct Engagement
     DashboardApp -- 1. Trigger OAuth Flow --> PDS
     PDS -- 2. Redirect with Auth Code --> DashboardApp
     DashboardApp -- 3. Create Like / Follow XRPC --> PDS
-
+ 
     %% Reply Link
     DashboardApp -- Open Post for Reply --> BlueskyApp
 ```
@@ -69,7 +77,8 @@ graph TB
 1.1.2. **Local Database (Home Server):**
 * 1.1.2.1. Manage local state using a local SQLite database (`network_graph.db`).
 * 1.1.2.2. Maintain a list of 1st-degree follows mapping RKeys to DIDs.
-* 1.1.2.3. Queue matched posts in a **`posts_outbox`** table until they are successfully written to Firestore.
+* 1.1.2.3. Queue matched posts in a **`evaluation_queue`** table waiting for batch relevance evaluation.
+* 1.1.2.4. Queue evaluated, relevant posts in a **`posts_outbox`** table until they are successfully written to Firestore.
 
 1.1.3. **Outbox Sync Worker (Home Server):**
 * 1.1.3.1. Monitor the local `posts_outbox` queue.
@@ -117,6 +126,7 @@ The following table outlines what data is synchronized between the Home Server, 
 | 3.2 | **Thumbs Up/Down Feedback** | Web Dashboard | Web Dashboard | Home Server Daemon | Dashboard writes to a sub-collection; Daemon reads periodically or via snapshot listener. |
 | 3.3 | **OAuth Credentials** | User's PDS | Web Dashboard | User's PDS | Stored in client browser LocalStorage only. Never sent to the Home Server or Firestore. |
 | 3.4 | **Filtering Rules & Graph** | Home Server DB/Config | Home Server Daemon / Config File | Home Server Daemon | Stored locally on the Home Server. |
+| 3.5 | **Backend Processing Stats** | Home Server Daemon | Home Server Daemon | Web Dashboard | Daemon writes stats to Firestore `/stats/backend` document; Dashboard listens via real-time snapshot listener. |
 
 ---
 
@@ -130,3 +140,7 @@ The following table outlines what data is synchronized between the Home Server, 
 | A004 | Feedback training is simple logging for later evaluation. | `[CONFIRMED]` | Confirmed by User on 2026-07-01. |
 | A007 | Deleted posts are soft-deleted in Firestore (`isDeleted: true`). | `[CONFIRMED]` | Confirmed by User on 2026-07-01. |
 | A008 | Client-side search and filtering in the UI is not required for version 1. | `[CONFIRMED]` | Confirmed by User on 2026-07-01. |
+| A009 | The default cap on the number of posts processed in a single batch is 100. | `[CONFIRMED]` | Confirmed by User on 2026-07-05. |
+| A010 | Backlogged posts exceeding the batch cap are kept in the queue indefinitely to carry over. | `[CONFIRMED]` | Confirmed by User on 2026-07-05. |
+| A011 | Secondary features and statistics panel are placed inside a collapsible side drawer. | `[CONFIRMED]` | Confirmed by User on 2026-07-05. |
+| A012 | Backend statistics are loaded dynamically from `/stats/backend` in Firestore. | `[CONFIRMED]` | Confirmed by User on 2026-07-05. |

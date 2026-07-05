@@ -58,7 +58,7 @@ These tests verify the Home Server daemon's parsing logic using mock JSON feeds.
 * 2.1.2. **Assertions:**
   - 2.1.2.1. The daemon parses the commit metadata correctly.
   - 2.1.2.2. Text triggers regex matches for `atproto` and `pds`.
-  - 2.1.2.3. The post is routed to Stage 2 (Gemini LLM evaluation or direct Firestore write if bypass mode is active).
+  - 2.1.2.3. If AI filtering is enabled, the parsed post (including text, authors, metadata, and matched rules) is inserted into the local SQLite `evaluation_queue` table with `retry_count = 0` and status pending evaluation.
 
 ### 2.2 Off-Topic Discard
 * 2.2.1. **Mock Input Event:**
@@ -93,7 +93,7 @@ These tests verify the Home Server daemon's parsing logic using mock JSON feeds.
 * 2.3.2. **Assertions:**
   - 2.3.2.1. The daemon detects the author is in your 1st-degree follows.
   - 2.3.2.2. The post bypasses regex keyword checks.
-  - 2.3.2.3. The post is routed directly to Gemini LLM for relevance evaluation.
+  - 2.3.2.3. The post is inserted into the local SQLite `evaluation_queue` table for batch evaluation.
 
 ### 2.4 Non-English Post Discard
 * 2.4.1. **Test Setup:**
@@ -102,6 +102,32 @@ These tests verify the Home Server daemon's parsing logic using mock JSON feeds.
 * 2.4.2. **Assertions:**
   - 2.4.2.1. The daemon detects that the post language array is set and does not contain `"en"`.
   - 2.4.2.2. The post is immediately discarded, and the Gemini API is **not** called.
+
+### 2.5 Batch Processing, Capping, and Backlog Ordering
+* 2.5.1. **Test Setup:**
+  - 2.5.1.1. Populate `evaluation_queue` with 150 mock posts ingested at different times (`matched_at` increasing from oldest post 1 to newest post 150).
+  - 2.5.1.2. Set `BATCH_EVAL_CAP = 100` and `BATCH_INTERVAL_SECONDS = 300`.
+* 2.5.2. **Test Action:** Trigger a batch evaluation worker run.
+* 2.5.3. **Assertions:**
+  - 2.5.3.1. The worker pulls exactly 100 posts from `evaluation_queue`.
+  - 2.5.3.2. The selected posts represent the 100 newest records (posts 51 to 150), verifying correct backlog ordering (most recent posts prioritized first).
+  - 2.5.3.3. The 50 older posts (posts 1 to 50) remain in `evaluation_queue` and are not deleted or processed in this batch run.
+  - 2.5.3.4. The processed 100 posts are deleted from `evaluation_queue` after their classifications are routed.
+
+### 2.6 Retry Failure Eviction
+* 2.6.1. **Test Setup:** A post in `evaluation_queue` has `retry_count = 3`.
+* 2.6.2. **Test Action:** Trigger a batch run where the Gemini API call fails with a temporary network timeout.
+* 2.6.3. **Assertions:**
+  - 2.6.3.1. The worker catches the Gemini API exception, increments `retry_count` to `4`.
+  - 2.6.3.2. Because `retry_count > 3`, the post is deleted from `evaluation_queue`.
+  - 2.6.3.3. An error entry is written to `processing_failures` with `event_type = 'gemini_call'`.
+
+### 2.7 Backend Stats Publishing
+* 2.7.1. **Test Action:** Observe Firestore and local DB state during and after the batch processing of 100 posts (assume 80 irrelevant, 20 relevant).
+* 2.7.2. **Assertions:**
+  - 2.7.2.1. The `/stats/backend` document in Firestore is updated.
+  - 2.7.2.2. The document fields match: `queueSize` matches remaining rows in `evaluation_queue` (e.g. 50), `lastBatchProcessedCount == 100`, `lastBatchSuccessCount == 100`, `lastBatchRelevantCount == 20`, and `backendStatus == "online"`.
+  - 2.7.2.3. The heartbeat updates: `lastActive` is set to the current UTC timestamp.
 
 ---
 
@@ -138,7 +164,7 @@ These tests verify resolving post metadata when a followed account interacts wit
   - 3.1.3.1. The daemon validates that the repost actor is a followed account.
   - 3.1.3.2. The daemon successfully triggers HTTP call to resolve target post details.
   - 3.1.3.3. The resolved post payload contains `matchRules = ["repost:deva.bsky.social"]`.
-  - 3.1.3.4. The resolved post bypasses keyword checks and is routed directly to Stage 2.
+  - 3.1.3.4. The resolved post bypasses keyword checks and is inserted into the local SQLite `evaluation_queue` table.
 
 ---
 
@@ -217,12 +243,12 @@ These scenarios verify client-side CSS layouts, state transitions, PWA metadata,
   - 7.2.2.3. The timeline stays static; background-added posts trigger the floating sticky banner `[ 🗘 Load 1 new posts ]` instead of inserting themselves.
 
 ### 7.3 Real-Time Review Counter
-* 7.3.1. **Test Action:** Monitor the unreviewed badge.
+* 7.3.1. **Test Action:** Open the collapsible side drawer and monitor the unreviewed counter adjacent to the Feed link.
   - 7.3.1.1. Increment check: Trigger ingestion daemon write of a new unreviewed post to Firestore.
   - 7.3.1.2. Decrement check: Click the `+` rating button on a card.
 * 7.3.2. **Assertions:**
-  - 7.3.2.1. When the new post is written, the unreviewed badge count immediately increments by 1.
-  - 7.3.2.2. When the card is rated, the unreviewed badge count immediately decrements by 1.
+  - 7.3.2.1. When the new post is written, the unreviewed badge count inside the side drawer immediately increments by 1.
+  - 7.3.2.2. When the card is rated, the unreviewed badge count inside the side drawer immediately decrements by 1.
 
 ### 7.4 Full parent Thread conversation
 * 7.4.1. **Test Setup:** Load a reply post card where `parentContext` is present.
@@ -240,7 +266,7 @@ These scenarios verify client-side CSS layouts, state transitions, PWA metadata,
   - 7.5.2.1. Global `html` and `body` margin and padding are set to `0`, and overflow is set to `hidden`.
   - 7.5.2.2. Global elements apply `box-sizing: border-box`. The root wrapper container uses `display: flex; flex-direction: column; width: 100vw; height: 100dvh; overflow: hidden;`.
   - 7.5.2.3. The root wrapper padding-top is `env(safe-area-inset-top)`.
-  - 7.5.2.4. The active card's viewport height matches the computation: `calc(100dvh - 56px - 72px - env(safe-area-inset-top) - env(safe-area-inset-bottom))`.
+  - 7.5.2.4. The active card's viewport height matches the computation: `calc(100dvh - 48px - 72px - env(safe-area-inset-top) - env(safe-area-inset-bottom))` (reflecting minimized 48px header).
   - 7.5.2.5. The active card scroll container enables internal scrolling (`overflow-y: auto`) and defines a bottom buffer (`padding-bottom: 80px`).
   - 7.5.2.6. The bottom action bar clears the swipe indicators: `height: calc(72px + env(safe-area-inset-bottom))` with a padding bottom of `env(safe-area-inset-bottom)`.
   - 7.5.2.7. Only **one** post card is rendered in the viewport (matching `posts[activePostIndex]`).
@@ -262,10 +288,25 @@ These scenarios verify client-side CSS layouts, state transitions, PWA metadata,
   - 7.7.2.2. **Assertion:** Assert that no update request is sent to Firestore and the `feedback` field remains `null`.
 
 ### 7.8 PWA Logo Click Hard Reload
-* 7.8.1. **Test Action:** Click the application logo element in the top-left of the page header.
+* 7.8.1. **Test Action:** Open the collapsible side drawer, and click the application logo element in the drawer header (or click "Check for Updates" inside the drawer).
 * 7.8.2. **Assertions:**
   - 7.8.2.1. The Service Worker registration update check (`registration.update()`) is invoked.
   - 7.8.2.2. A cache-busting page refresh is triggered.
+
+### 7.9 Collapsible Side Drawer & Status Indicator Dot
+* 7.9.1. **Test Action 1 (Drawer Open/Close):** Click the hamburger icon (`#menu-toggle-btn`) in the header, then click the backdrop (`#drawer-backdrop`).
+  - 7.9.1.1. **Assertion:** Clicking the hamburger toggles the side drawer (`#side-drawer`) state to open (drawer transforms horizontally to `left: 0`).
+  - 7.9.1.2. **Assertion:** Clicking the backdrop closes the drawer (transforms back to `left: -280px`).
+* 7.9.2. **Test Action 2 (Drawer Content):** Open the side drawer and inspect contents.
+  - 7.9.2.1. **Assertion:** Drawer contains Google account user profile, ATProto connect button, navigations with counters, and the Backend Stats panel.
+  - 7.9.2.2. **Assertion:** Stats card renders `queueSize`, `geminiFailureCount24h`, relative time since `lastBatchTime`, and `lastError` alert text if present.
+* 7.9.3. **Test Action 3 (Status Dot Color Code):** Mock `/stats/backend` values in Firestore.
+  - 7.9.3.1. Case A: Set `lastActive = Date.now()`, `geminiFailureCount24h = 0`, `lastError = null`.
+    - **Assertion:** The header status dot (`#backend-status-dot`) has green styling.
+  - 7.9.3.2. Case B: Set `lastActive = Date.now()`, `geminiFailureCount24h = 2`.
+    - **Assertion:** The header status dot has amber styling.
+  - 7.9.3.3. Case C: Set `lastActive = Date.now() - 600000` (10 minutes ago).
+    - **Assertion:** The header status dot has red styling.
 
 ---
 

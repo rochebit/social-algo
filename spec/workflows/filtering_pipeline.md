@@ -14,6 +14,9 @@ The Home Server daemon loads configuration parameters from a local environment f
 | 1.2 | **`GEMINI_API_KEY`** | string | `""` | API key used for the Gemini relevance evaluation. Required if `AI_FILTERING_ENABLED` is `true`. |
 | 1.3 | **`DATETIME_FORMAT`** | string | `"ISO-8601"` | Standard format for all database timestamps (UTC string, e.g., `YYYY-MM-DDTHH:mm:ss.sssZ`). |
 | 1.4 | **`USER_DID`** | string | `""` | The ATProto Decentralized Identifier (DID) of the owner (used to monitor follow/like/repost events from the firehose). |
+| 1.5 | **`GEMINI_MODEL`** | string | `"gemini-3.1-flash-lite"` | The Gemini model identifier used for relevance evaluation. |
+| 1.6 | **`BATCH_INTERVAL_SECONDS`** | integer | `300` | Frequency of batch evaluation runs in seconds (default: 5 minutes / 300 seconds). |
+| 1.7 | **`BATCH_EVAL_CAP`** | integer | `100` | Maximum number of posts evaluated in a single batch run. |
 
 ---
 
@@ -42,8 +45,8 @@ The Home Server daemon maintains a persistent WebSocket connection to subscribe 
 ### 2.3 Event Parsing & Operation Routing
 For every message received, the daemon checks the collection type and routes the payload:
 * 2.3.1. **`app.bsky.feed.post` Collections:**
-  - 2.3.1.1. **Create Operations (`commit.operation == "create"`):** Route to **Section 3: Stage 1: Rule-Based & Network Pre-Filtering**.
-  - 2.3.1.2. **Delete Operations (`commit.operation == "delete"`):** Construct the post URI (`at://{did}/{collection}/{rkey}`), calculate the Firestore document ID using the rule in section 2.2.2, and write a delete action to the local outbox.
+  - 2.3.1.1. **Create Operations (`commit.operation == "create"`):** Route to **Section 3: Stage 1: Rule-Based & Network Pre-Filtering**. If the post passes Stage 1, extract parsed rich text facets and media embeds (Section 7), and insert the post into the SQLite `evaluation_queue` table (Section 4.1.4) for later batch evaluation.
+  - 2.3.1.2. **Delete Operations (`commit.operation == "delete"`):** Construct the post URI (`at://{did}/{collection}/{rkey}`), calculate the Firestore document ID using the rule in section 2.2.2, write a delete action to the local outbox, and also delete the post from `evaluation_queue` if it is still pending evaluation.
 * 2.3.2. **`app.bsky.graph.follow` Collections:**
   - 2.3.2.1. Route to **Section 4.3: Real-Time Firehose Syncing (Jetstream events)**.
 * 2.3.3. **`app.bsky.feed.repost` & `app.bsky.feed.like` Collections:**
@@ -63,7 +66,7 @@ To minimize LLM token usage and latency, posts must pass a rule-based pre-filter
 
 ### 3.2 Network Graph Match (Bypass Keywords)
 * 3.2.1. **Rule:** Check if the post `authorDid` matches an entry in your local SQLite table `first_degree_follows`.
-* 3.2.2. **Outcome:** Posts matching this condition bypass keyword checks completely and proceed directly to **Section 8: Stage 2: Relevance Evaluation Flow** (provided they pass the Language Gate).
+* 3.2.2. **Outcome:** Posts matching this condition bypass keyword checks completely, parse rich text facets and media embeds (Section 7), and are inserted directly into the SQLite `evaluation_queue` table (Section 4.1.4) for batch evaluation (provided they pass the Language Gate).
 
 ### 3.3 Keyword & Regex Matching (For General Network Posts)
 If the author is not in your network graph, the post text must match any of the following case-insensitive regex patterns:
@@ -161,6 +164,23 @@ CREATE TABLE processing_failures (
     created_at TEXT NOT NULL       -- ISO-8601 UTC string
 );
 ```
+* 4.1.4. **`evaluation_queue` Table:**
+```sql
+CREATE TABLE evaluation_queue (
+    uri TEXT PRIMARY KEY,
+    cid TEXT NOT NULL,
+    author_did TEXT NOT NULL,
+    author_handle TEXT NOT NULL,
+    text TEXT NOT NULL,
+    langs TEXT,                    -- JSON stringified array of languages
+    facets TEXT,                   -- JSON stringified array of facets (from section 7)
+    media_embed TEXT,              -- JSON stringified mediaEmbed object (from section 7)
+    match_rules TEXT NOT NULL,     -- JSON stringified array of matched rules
+    retry_count INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL,      -- ISO-8601 UTC string (post creation)
+    matched_at TEXT NOT NULL       -- ISO-8601 UTC string (ingestion time)
+);
+```
 
 ### 4.2 Startup Sync Logic
 * 4.2.1. **Sync check:** On initial startup (or if the database is unpopulated):
@@ -216,7 +236,7 @@ When someone you follow likes or reposts (boosts) a post, that target post is re
   ```
 * 6.2.2. **Parsing:** Extract the post contents (text, author DID, author handle, created timestamp, facets, and media embeds).
 * 6.2.3. **Match Rule Logging:** Add the string `"repost:{actorHandle}"` or `"like:{actorHandle}"` to the post's `matchRules` metadata array.
-* 6.2.4. **Routing:** Route the fully constructed post payload (bypassing keyword rules) directly to **Section 8: Stage 2: Relevance Evaluation Flow** for final validation.
+* 6.2.4. **Routing:** Insert the resolved post payload (including text, author DID, author handle, created timestamp, facets, media embeds, and `matchRules` array) directly into the SQLite `evaluation_queue` table (Section 4.1.4) for batch evaluation.
 
 ---
 
@@ -256,31 +276,42 @@ If the Jetstream record contains an `embed` object, inspect the type and map it 
 
 ---
 
-## 8. Stage 2: Relevance Evaluation Flow
+## 8. Stage 2: Relevance Evaluation & Batching Flow
 
-If a post passes Stage 1 (or is routed from the Like/Repost resolver), the pipeline executes the following evaluation flow:
+If a post passes Stage 1 (or is routed from the Like/Repost resolver), it is queued for batch processing.
 
 ```mermaid
 graph TD
-    Start[Post Passes Stage 1] --> CheckConfig{AI_FILTERING_ENABLED == true?}
+    Start[Batch Interval Triggered] --> CheckQueue{evaluation_queue is non-empty?}
+    CheckQueue -- Yes --> SelectBatch[Select BATCH_EVAL_CAP posts ORDER BY matched_at DESC]
+    SelectBatch --> ForEach[For Each Post in Batch]
+    ForEach --> ResolveContext[Resolve Parent & Quote Context]
+    ResolveContext --> CheckConfig{AI_FILTERING_ENABLED == true?}
     
-    CheckConfig -- Yes --> CallLLM[Query Gemini API]
-    CallLLM --> CheckScore{isRelevant == true?}
-    
+    CheckConfig -- Yes --> CallLLM[Query Gemini API using gemini-3.1-flash-lite]
+    CallLLM -- Success --> CheckScore{isRelevant == true?}
     CheckScore -- Yes --> QueueOutbox[Insert into posts_outbox: write]
-    CheckScore -- No --> Discard[Discard Post]
+    CheckScore -- No --> DeleteQueue[Delete from evaluation_queue]
+    
+    CallLLM -- Failure --> HandleFailure[Log Error & Increment retry_count. If > 3, Evict/Delete]
     
     CheckConfig -- No --> WriteBypass[Set default score/metadata]
     WriteBypass --> QueueOutbox
+    
+    QueueOutbox --> DeleteQueue
+    
+    DeleteQueue --> CheckMore{All selected processed?}
+    CheckMore -- Yes --> UpdateStats[Update /stats/backend in Firestore]
+    CheckMore -- No --> ForEach
 ```
 
 ### 8.1 AI-Bypass Mode (`AI_FILTERING_ENABLED = false`)
-* 8.1.1. The post bypasses Gemini evaluation.
-* 8.1.2. The daemon generates the JSON payload containing the parsed `facets` and `mediaEmbed` objects.
-* 8.1.3. Insert a record into the SQLite table `posts_outbox` with `action = 'write'`, `status = 'pending'`, and standard values (`relevanceScore = 100`, `relevanceExplanation = "Bypassed filtering by configuration"`).
+* 8.1.1. In bypass mode, the batch system is bypassed entirely.
+* 8.1.2. The daemon processes the post at ingestion time, generating the JSON payload containing the parsed `facets` and `mediaEmbed` objects.
+* 8.1.3. Insert a record directly into the SQLite table `posts_outbox` with `action = 'write'`, `status = 'pending'`, and standard values (`relevanceScore = 100`, `relevanceExplanation = "Bypassed filtering by configuration"`).
 
-### 8.2 AI-Evaluation Mode (`AI_FILTERING_ENABLED = true`)
-* 8.2.1. **Model:** Use `gemini-2.5-flash`.
+### 8.2 AI-Evaluation Mode & Batch Processing (`AI_FILTERING_ENABLED = true`)
+* 8.2.1. **Model:** Use `gemini-3.1-flash-lite` (or custom model specified in `GEMINI_MODEL`).
 * 8.2.2. **Parameters:** Set `temperature: 0.1` and `responseMimeType: "application/json"`.
 * 8.2.3. **JSON Output Schema:** Enforce response structure matching:
 ```json
@@ -290,11 +321,37 @@ graph TD
   "reasoning": string
 }
 ```
-* 8.2.4. **Outcome Routing:**
-  - 8.2.4.1. If `isRelevant == true`, generate the payload and insert a row into the SQLite table `posts_outbox` with `action = 'write'` and `status = 'pending'`.
-  - 8.2.4.2. If `isRelevant == false`, discard the post immediately.
+* 8.2.4. **Batch processing loop:** An asynchronous background worker runs continuously every `BATCH_INTERVAL_SECONDS` (default: 300 seconds / 5 minutes).
+  - 8.2.4.1. **Fetch Queue:** Query the SQLite `evaluation_queue` table for posts to process:
+    ```sql
+    SELECT * FROM evaluation_queue ORDER BY matched_at DESC LIMIT {BATCH_EVAL_CAP};
+    ```
+    Ordering by `matched_at DESC` ensures that more recent posts are processed first (prioritized) if a large backlog builds up.
+  - 8.2.4.2. **Resolve Contexts:** For each selected post, check for external post references and resolve their content:
+    - 8.2.4.2.1. Resolve the parent post thread context (Section 5.1).
+    - 8.2.4.2.2. Resolve the quoted post context (Section 5.2).
+  - 8.2.4.3. **Evaluate Post:** Format the Gemini request using the System Prompt (Section 8.3) and User Prompt Template (Section 8.4), and execute the Gemini API call.
+  - 8.2.4.4. **Outcome Routing:**
+    - 8.2.4.4.1. If `isRelevant == true`, generate the document payload (incorporating the parsed media embeds, facets, contexts, score, explanation, and matched rules) and insert a row into the SQLite `posts_outbox` table with `action = 'write'`, `status = 'pending'`.
+    - 8.2.4.4.2. If `isRelevant == false`, discard the post immediately (do not write to outbox).
+    - 8.2.4.4.3. Once evaluated successfully, delete the post from `evaluation_queue`.
+  - 8.2.4.5. **Error & Retry Handling:** If a temporary error (e.g. rate limits, timeout, API down, context fetch fail) occurs during evaluation:
+    - 8.2.4.5.1. Increment the post's `retry_count` in the `evaluation_queue` table.
+    - 8.2.4.5.2. If `retry_count > 3`, log the error to `processing_failures` table with `event_type = 'gemini_call'` (or `context_fetch`), delete the post from `evaluation_queue`, and continue.
+    - 8.2.4.5.3. If `retry_count <= 3`, leave the post in `evaluation_queue` to be retried in the next batch execution.
 
-* 8.2.5. **System Prompt:** The following exact text must be sent as the system instruction to the Gemini model. It must not be modified by the implementing agent.
+* 8.2.5. **Statistics Publishing:** Immediately after completing each batch run, and also on a recurring heartbeat timer every 60 seconds, the daemon must update a single statistics document in Cloud Firestore at the path `/stats/backend`. The stats document must contain:
+  - 8.2.5.1. `lastActive`: string (ISO-8601 UTC timestamp of the latest heartbeat or update).
+  - 8.2.5.2. `lastBatchTime`: string (ISO-8601 UTC timestamp of the last completed batch processing run).
+  - 8.2.5.3. `queueSize`: integer (count of rows currently remaining in SQLite `evaluation_queue` table).
+  - 8.2.5.4. `geminiFailureCount24h`: integer (count of entries in `processing_failures` with `event_type == 'gemini_call'` created in the last 24 hours).
+  - 8.2.5.5. `lastBatchProcessedCount`: integer (total posts selected in the most recent batch).
+  - 8.2.5.6. `lastBatchSuccessCount`: integer (number of posts successfully evaluated in the most recent batch).
+  - 8.2.5.7. `lastBatchRelevantCount`: integer (number of posts from the batch that were found relevant and written to the outbox).
+  - 8.2.5.8. `lastError`: string or null (the error message of the most recent failure in the `processing_failures` table, or `null` if no failures).
+  - 8.2.5.9. `backendStatus`: string (`"online"`).
+
+* 8.3. **System Prompt:** The following exact text must be sent as the system instruction to the Gemini model. It must not be modified by the implementing agent.
 
 ```
 You are a relevance filter for an open social web developer feed. Your job is to evaluate social media posts and determine whether they are worth surfacing to a software engineer who is active in the AT Protocol (atproto) and ActivityPub developer ecosystems and works at Google.
@@ -429,3 +486,5 @@ An asynchronous background task within the daemon runs continuously to push loca
 |---|---|---|---|
 | A005 | Datetime fields must use ISO-8601 UTC strings. | `[CONFIRMED]` | Confirmed by User on 2026-07-01. |
 | A006 | The Gemini API key will be loaded via a local env file on the Home Server. | `[CONFIRMED]` | Confirmed by User on 2026-07-01. |
+| A009 | The default cap on the number of posts processed in a single batch is 100. | `[CONFIRMED]` | Confirmed by User on 2026-07-05. |
+| A010 | Backlogged posts exceeding the batch cap are kept in the queue indefinitely to carry over. | `[CONFIRMED]` | Confirmed by User on 2026-07-05. |

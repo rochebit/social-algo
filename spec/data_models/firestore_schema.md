@@ -6,9 +6,10 @@ This document specifies the Firestore database structure, document schemas, inde
 
 ## 1. Firestore Schema & Collections
 
-We utilize two primary collections in Firestore:
+We utilize two primary collections and a statistics collection containing a singleton document in Firestore:
 * 1.1. `posts`: Represents the filtered feed items matching developer keywords or network parameters.
 * 1.2. `feedback_logs`: Archives all rating events with metadata to support offline analysis.
+* 1.3. `stats`: Contains a single backend status monitoring document.
 
 ---
 
@@ -108,6 +109,40 @@ We utilize two primary collections in Firestore:
 
 ---
 
+### 1.3 `stats` Collection (Singleton)
+
+* 1.3.1. **Path:** `/stats/backend`
+* 1.3.2. **Document ID:** `backend`
+* 1.3.3. **Document Schema JSON Model:**
+```json
+{
+  "lastActive": "2026-07-05T10:55:00.000Z",
+  "lastBatchTime": "2026-07-05T10:50:00.000Z",
+  "queueSize": 12,
+  "geminiFailureCount24h": 0,
+  "lastBatchProcessedCount": 45,
+  "lastBatchSuccessCount": 45,
+  "lastBatchRelevantCount": 3,
+  "lastError": null,
+  "backendStatus": "online"
+}
+```
+* 1.3.4. **Document Fields Schema:**
+
+| ID | Field Name | Type | Description |
+|---|---|---|---|
+| 1.3.4.1 | `lastActive` | string (ISO-8601 UTC) | Timestamp of when the daemon was last active (heartbeat). |
+| 1.3.4.2 | `lastBatchTime` | string (ISO-8601 UTC) | Timestamp of when the last batch process finished. |
+| 1.3.4.3 | `queueSize` | number | Number of posts currently queued for evaluation in SQLite. |
+| 1.3.4.4 | `geminiFailureCount24h` | number | Count of Gemini API call failures logged in the last 24 hours. |
+| 1.3.4.5 | `lastBatchProcessedCount` | number | Number of posts selected for the last batch evaluation run. |
+| 1.3.4.6 | `lastBatchSuccessCount` | number | Number of posts successfully classified (either relevant or irrelevant) in the last batch run. |
+| 1.3.4.7 | `lastBatchRelevantCount` | number | Number of posts classified as relevant and pushed to Firestore in the last batch run. |
+| 1.3.4.8 | `lastError` | string or null | Error details of the last logged processing failure, or null if none. |
+| 1.3.4.9 | `backendStatus` | string | Hardcoded status representing backend presence (`"online"`). |
+
+---
+
 ## 2. Required Indexes
 
 To query the feed efficiently on the client (retrieving posts by score with fallback chronological tie-breakers), the following indexes must be provisioned in Firebase:
@@ -149,6 +184,11 @@ service cloud.firestore {
     match /feedback_logs/{feedbackId} {
       allow read, write: if isOwner();
     }
+
+    // Rule for backend stats
+    match /stats/{docId} {
+      allow read, write: if isOwner();
+    }
   }
 }
 ```
@@ -160,6 +200,7 @@ service cloud.firestore {
   - 3.2.3. Assert user email matches the whitelisted owner email: `request.auth.token.email == "OWNER_EMAIL_PLACEHOLDER"`.
 * 3.3. **`posts` Collection Path Access:** Allow read/write access on `/posts/{postId}` if and only if `isOwner()` is true.
 * 3.4. **`feedback_logs` Collection Path Access:** Allow read/write access on `/feedback_logs/{feedbackId}` if and only if `isOwner()` is true.
+* 3.5. **`stats` Collection Path Access:** Allow read/write access on `/stats/{docId}` if and only if `isOwner()` is true.
 
 > [!IMPORTANT]
 > The developer/agent implementing this deployment must replace `OWNER_EMAIL_PLACEHOLDER` with the owner's actual Google Account email address during the Firebase deploy step.
@@ -171,3 +212,4 @@ service cloud.firestore {
 | ID | Description | Status | Resolution / Date |
 |---|---|---|---|
 | A005 | Datetime fields must use ISO-8601 UTC strings. | `[CONFIRMED]` | Confirmed by User on 2026-07-01. |
+| A012 | Backend statistics are loaded dynamically from `/stats/backend` in Firestore. | `[CONFIRMED]` | Confirmed by User on 2026-07-05. |

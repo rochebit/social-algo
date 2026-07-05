@@ -26,7 +26,7 @@ The dashboard is structured as a single-page application (SPA) containing three 
 
 ### 2.2 ATProto OAuth Session (Bluesky Access)
 To interact with the Bluesky API for Liking and Following, the app maintains a client-side OAuth session:
-* 2.2.1. **Session Check:** Render a "Connect Bluesky Account" button in the dashboard header if no active ATProto session token exists in LocalStorage.
+* 2.2.1. **Session Check:** Render a "Connect Bluesky Account" button inside the collapsible side drawer (Section 4.3) if no active ATProto session token exists in LocalStorage. If connected, render the active user's handle (e.g. `@dev.bsky.social`) alongside a "Disconnect" action button.
 * 2.2.2. **Metadata Endpoint:** The dashboard must serve a valid OAuth client metadata document at `{ORIGIN}/client-metadata.json`.
 
 ---
@@ -65,14 +65,14 @@ To prevent posts from shifting or moving while reading, the feed does **not** bi
       updateUnreviewedCounterUI(totalUnreviewed);
     });
   ```
-* 3.3.2. **Visual Placement:** Display the count prominently in the top header: `[ {N} posts remaining to review ]`.
+* 3.3.2. **Visual Placement:** Display the count inside the collapsible side drawer (Section 4.3) adjacent to the `/feed` navigation link (e.g. `Feed ({N})`).
 * 3.3.3. **Dynamic Updates:**
   - 3.3.3.1. Decrement the counter UI immediately when the user rates a post.
   - 3.3.3.2. Increment the counter UI immediately when the ingestion daemon syncs a new post match.
 
 ### 3.4 PWA Update & Logo Refresh Action
-* 3.4.1. **Logo Placement:** Render the application logo in the top-left corner of the header.
-* 3.4.2. **Click Trigger & Cache Busting:** When the user clicks the logo, the application must:
+* 3.4.1. **Logo Placement:** Render the application logo inside the collapsible side drawer header.
+* 3.4.2. **Click Trigger & Cache Busting:** When the user clicks the logo inside the drawer (or clicks the "Check for Updates" button inside the drawer), the application must:
   - 3.4.2.1. Call the Service Worker registration update method: `registration.update()` to check for a new service worker / newer site version.
   - 3.4.2.2. Trigger a hard reload of the page (`window.location.reload(true)` or equivalent cache-busting reload) to fetch and apply the updated assets immediately without needing to reinstall the PWA.
 
@@ -80,7 +80,7 @@ To prevent posts from shifting or moving while reading, the feed does **not** bi
 
 ## 4. Layout & Viewport Variations (Mobile vs. Desktop)
 
-The dashboard presents different layouts depending on the user's screen width, optimized for modern high-resolution displays and safe areas (e.g., Pixel 10 Pro XL).
+The dashboard presents different layouts depending on the user's screen width, optimized for modern high-resolution displays and safe areas (e.g., Pixel 10 Pro XL). To keep the viewport exceptionally clean, secondary features (navigation, user profile, account connection, and detailed backend statistics) sit behind a menu button that toggles a collapsible side drawer.
 
 ### 4.1 Mobile Single-Post View (`@media (max-width: 639px)`)
 * 4.1.1. **Viewport Constraints & Reset:**
@@ -89,7 +89,7 @@ The dashboard presents different layouts depending on the user's screen width, o
   - 4.1.1.3. **Top Safe-Area Clearance:** Apply padding to the root layout wrapper `padding-top: env(safe-area-inset-top, 16px)` to prevent status bar/notch overlaps.
 * 4.1.2. **Active Post State:** Maintain an integer state variable: `activePostIndex = 0`.
 * 4.1.3. **Card Rendering:** Render **only** the single post card matching `posts[activePostIndex]`. Center it on screen with a dynamic viewport height layout.
-  - 4.1.3.1. **Height Calculation:** The active card scrollable viewport must be strictly bound to: `height: calc(100dvh - 56px - 72px - env(safe-area-inset-top, 16px) - env(safe-area-inset-bottom, 16px))` (header height is 56px, bottom bar is 72px).
+  - 4.1.3.1. **Height Calculation:** The active card scrollable viewport must be strictly bound to: `height: calc(100dvh - 48px - 72px - env(safe-area-inset-top, 16px) - env(safe-area-inset-bottom, 16px))` (header height is 48px, bottom bar is 72px).
   - 4.1.3.2. **Internal Scroll:** Set `overflow-y: auto` inside the card container to gracefully support long text and deep nested threads.
   - 4.1.3.3. **Bottom Buffer:** Include `padding-bottom: 80px` in the scrollable card box to prevent content clipping behind the fixed action bar.
 * 4.1.4. **Fixed Bottom Action Bar:** Render a sticky action bar container:
@@ -107,6 +107,32 @@ The dashboard presents different layouts depending on the user's screen width, o
 * 4.2.2. **Sizing:** Set a maximum width of `640px` and center the feed column on screen.
 * 4.2.3. **Action Bar Integration:** Embed an individual feedback button action bar and a dedicated "Skip" button directly inside each card footer.
 * 4.2.4. **Skip Action:** Clicking the "Skip" button on a card in desktop view hides/dismisses that post card from the current viewport session (e.g. by adding the post ID to a list of skipped IDs in local component state) without writing any feedback to Firestore.
+
+### 4.3 Collapsible Side Drawer & Compact Header
+The top navigation area is minimized to a compact **Header** and an interactive **Side Drawer** to maximize feed real-estate and hide non-essential layouts:
+* 4.3.1. **The Compact Header (`#app-header`):**
+  - 4.3.1.1. **CSS Layout:** Set header height to `48px`. Flex container: `display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background-color: #0f172a; border-bottom: 1px solid rgba(255,255,255,0.08); z-index: 999;`.
+  - 4.3.1.2. **Menu Toggle Button (`#menu-toggle-btn`):** Render a hamburger menu icon (width/height `24px`) on the left to toggle the collapsible side drawer open.
+  - 4.3.1.3. **Backend Status Indicator Dot (`#backend-status-dot`):** Render a small circular status dot (width/height `12px`, rounded corners `50%`) representing the daemon state retrieved from Firestore `/stats/backend`:
+    - 4.3.1.3.1. **Green (Online):** If the current time is within 7 minutes of `lastActive` AND `geminiFailureCount24h == 0`.
+    - 4.3.1.3.2. **Amber (Issues Detected):** If the current time is within 7 minutes of `lastActive` BUT `geminiFailureCount24h > 0` or `lastError != null`.
+    - 4.3.1.3.3. **Red (Offline):** If the current time is more than 7 minutes past `lastActive`.
+    - 4.3.1.3.4. **Tooltip Info:** Provide a native browser tooltip (`title` attribute) listing quick metrics (e.g. `Status: Online | Queue: {queueSize} | Failures: {geminiFailureCount24h}`).
+  - 4.3.1.4. **Header Cleanliness:** No titles, logo icons, username labels, or full review counts may be visible in the main header space.
+* 4.3.2. **The Collapsible Side Drawer (`#side-drawer`):**
+  - 4.3.2.1. **CSS Layout:** Positioned off-screen by default: `position: fixed; top: 0; left: -280px; width: 280px; height: 100dvh; background: rgba(30, 41, 59, 0.95); backdrop-filter: blur(20px); border-right: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 8px 0 32px rgba(0, 0, 0, 0.5); z-index: 1050; display: flex; flex-direction: column; transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); box-sizing: border-box;`.
+  - 4.3.2.2. **Overlay/Backdrop (`#drawer-backdrop`):** Render a semi-transparent screen overlay (`background-color: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); z-index: 1040;`) when the drawer is open. Clicking the backdrop closes the drawer.
+  - 4.3.2.3. **Drawer Header:** Contains the application logo and a Close button. Clicking the logo triggers the PWA update check and cache-busting reload (Section 3.4.2).
+  - 4.3.2.4. **User Profile Section:** Renders Google user profile picture, email address, and a "Sign Out" button.
+  - 4.3.2.5. **ATProto Connection Section:** Renders Bluesky credentials status (Section 2.2.1).
+  - 4.3.2.6. **Navigation Links:**
+    - 4.3.2.6.1. Link to **Feed (`/feed`)** appended with the real-time unreviewed counter: `Feed ({totalUnreviewed})`.
+    - 4.3.2.6.2. Link to **Archive (`/archive`)**.
+  - 4.3.2.7. **Backend Stats Summary Block (`#backend-stats-panel`):** A visually structured card rendering real-time fields from Firestore `/stats/backend`:
+    - 4.3.2.7.1. **Queue Backlog Size:** Rendered text: `Queue: {queueSize} pending`.
+    - 4.3.2.7.2. **Gemini 24h Failures:** Rendered text: `Gemini Fails (24h): {geminiFailureCount24h}`.
+    - 4.3.2.7.3. **Last Batch Summary:** Rendered text: `Last Batch: {relativeTime} ({lastBatchProcessedCount} posts processed, {lastBatchRelevantCount} matched)`.
+    - 4.3.2.7.4. **Last Error Message:** If `lastError` is not null, display it inside a small red-tinted alert block with horizontal scrolling for long stack traces.
 
 ---
 
@@ -213,3 +239,5 @@ The application design must achieve a highly aesthetic, premium look. Generic el
 | ID | Description | Status | Resolution / Date |
 |---|---|---|---|
 | A008 | Client-side search and filtering in the UI is not required for version 1. | `[CONFIRMED]` | Confirmed by User on 2026-07-01. |
+| A011 | Secondary features and statistics panel are placed inside a collapsible side drawer. | `[CONFIRMED]` | Confirmed by User on 2026-07-05. |
+| A012 | Backend statistics are loaded dynamically from `/stats/backend` in Firestore. | `[CONFIRMED]` | Confirmed by User on 2026-07-05. |
