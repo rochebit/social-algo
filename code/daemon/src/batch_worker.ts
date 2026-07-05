@@ -102,6 +102,7 @@ export async function runBatchEvaluation(): Promise<void> {
 
         // 3. Outcome Routing
         try {
+          console.log(`[Batch Worker] Evaluated post by @${item.author_handle}: isRelevant=${evalResult.isRelevant}, score=${evalResult.score}, explanation="${evalResult.reasoning.substring(0, 80)}"`);
           successCount++;
           if (evalResult.isRelevant) {
             relevantCount++;
