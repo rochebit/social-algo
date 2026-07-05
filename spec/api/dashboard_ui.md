@@ -118,6 +118,7 @@ The top navigation area is minimized to a compact **Header** and an interactive 
     - 4.3.1.3.2. **Amber (Issues Detected):** If the current time is within 7 minutes of `lastActive` BUT `geminiFailureCount24h > 0` or `lastError != null`.
     - 4.3.1.3.3. **Red (Offline):** If the current time is more than 7 minutes past `lastActive`.
     - 4.3.1.3.4. **Tooltip Info:** Provide a native browser tooltip (`title` attribute) listing quick metrics (e.g. `Status: Online | Queue: {queueSize} | Failures: {geminiFailureCount24h}`).
+    - 4.3.1.3.5. **Click Interaction:** Clicking the dot must open the **Backend Status Details Modal** (`#backend-status-modal`) described in Section 4.4.
   - 4.3.1.4. **Header Cleanliness:** No titles, logo icons, username labels, or full review counts may be visible in the main header space.
 * 4.3.2. **The Collapsible Side Drawer (`#side-drawer`):**
   - 4.3.2.1. **CSS Layout:** Positioned off-screen by default: `position: fixed; top: 0; left: -280px; width: 280px; height: 100dvh; background: rgba(30, 41, 59, 0.95); backdrop-filter: blur(20px); border-right: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 8px 0 32px rgba(0, 0, 0, 0.5); z-index: 1050; display: flex; flex-direction: column; transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); box-sizing: border-box;`.
@@ -133,6 +134,18 @@ The top navigation area is minimized to a compact **Header** and an interactive 
     - 4.3.2.7.2. **Gemini 24h Failures:** Rendered text: `Gemini Fails (24h): {geminiFailureCount24h}`.
     - 4.3.2.7.3. **Last Batch Summary:** Rendered text: `Last Batch: {relativeTime} ({lastBatchProcessedCount} posts processed, {lastBatchRelevantCount} matched)`.
     - 4.3.2.7.4. **Last Error Message:** If `lastError` is not null, display it inside a small red-tinted alert block with horizontal scrolling for long stack traces.
+
+### 4.4 Backend Status Details Modal (`#backend-status-modal`)
+When the owner clicks the `#backend-status-dot` status indicator dot in the compact header, the application must display a modal overlay rendering the detailed telemetry from `/stats/backend` in Firestore:
+* 4.4.1. **Visual Styling:** Frosted glassmorphism layout matching the design tokens (Section 8.1.2) with a dark semi-transparent overlay backdrop (`#modal-backdrop`). Centered on screen.
+* 4.4.2. **Metrics Displayed:**
+  - 4.4.2.1. **Status Header:** Displays status title (e.g., "Backend Status: ONLINE" or "OFFLINE") accompanied by the color-coded status dot.
+  - 4.4.2.2. **Active Heartbeat:** Exact ISO timestamp of the last active signal and relative time duration since then (e.g., "Last Active: 2026-07-05T12:00:00Z (2m ago)").
+  - 4.4.2.3. **Queue Status:** Backlog count: "Queue Backlog: {queueSize} posts pending evaluation in SQLite".
+  - 4.4.2.4. **Gemini Failures (24h):** Error count: "Gemini API Failures (24h): {geminiFailureCount24h}".
+  - 4.4.2.5. **Last Batch Telemetry:** Detailed metrics of the last batch processing run: "Last Batch Run: Completed at {lastBatchTime}. Selected {lastBatchProcessedCount} posts. Classified {lastBatchSuccessCount} successfully, finding {lastBatchRelevantCount} relevant posts."
+  - 4.4.2.6. **Recent Error Alert Block:** If `lastError` is not null, display a warning card with the full error text. Provide a "Copy Error" button next to it.
+* 4.4.3. **Closing Actions:** The modal must close immediately if the user clicks a dedicated "Close" (`x`) button, clicks the backdrop overlay (`#modal-backdrop`), or presses the `Escape` key.
 
 ---
 

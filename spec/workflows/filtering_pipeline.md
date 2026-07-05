@@ -313,13 +313,16 @@ graph TD
 ### 8.2 AI-Evaluation Mode & Batch Processing (`AI_FILTERING_ENABLED = true`)
 * 8.2.1. **Model:** Use `gemini-3.1-flash-lite` (or custom model specified in `GEMINI_MODEL`).
 * 8.2.2. **Parameters:** Set `temperature: 0.1` and `responseMimeType: "application/json"`.
-* 8.2.3. **JSON Output Schema:** Enforce response structure matching:
+* 8.2.3. **JSON Output Schema:** Enforce response structure matching a JSON array of objects:
 ```json
-{
-  "isRelevant": boolean,
-  "score": integer,
-  "reasoning": string
-}
+[
+  {
+    "uri": "string",
+    "isRelevant": boolean,
+    "score": integer,
+    "reasoning": string
+  }
+]
 ```
 * 8.2.4. **Batch processing loop:** An asynchronous background worker runs continuously every `BATCH_INTERVAL_SECONDS` (default: 300 seconds / 5 minutes).
   - 8.2.4.1. **Fetch Queue:** Query the SQLite `evaluation_queue` table for posts to process:
@@ -330,15 +333,15 @@ graph TD
   - 8.2.4.2. **Resolve Contexts:** For each selected post, check for external post references and resolve their content:
     - 8.2.4.2.1. Resolve the parent post thread context (Section 5.1).
     - 8.2.4.2.2. Resolve the quoted post context (Section 5.2).
-  - 8.2.4.3. **Evaluate Post:** Format the Gemini request using the System Prompt (Section 8.3) and User Prompt Template (Section 8.4), and execute the Gemini API call.
-  - 8.2.4.4. **Outcome Routing:**
-    - 8.2.4.4.1. If `isRelevant == true`, generate the document payload (incorporating the parsed media embeds, facets, contexts, score, explanation, and matched rules) and insert a row into the SQLite `posts_outbox` table with `action = 'write'`, `status = 'pending'`.
-    - 8.2.4.4.2. If `isRelevant == false`, discard the post immediately (do not write to outbox).
-    - 8.2.4.4.3. Once evaluated successfully, delete the post from `evaluation_queue`.
-  - 8.2.4.5. **Error & Retry Handling:** If a temporary error (e.g. rate limits, timeout, API down, context fetch fail) occurs during evaluation:
-    - 8.2.4.5.1. Increment the post's `retry_count` in the `evaluation_queue` table.
-    - 8.2.4.5.2. If `retry_count > 3`, log the error to `processing_failures` table with `event_type = 'gemini_call'` (or `context_fetch`), delete the post from `evaluation_queue`, and continue.
-    - 8.2.4.5.3. If `retry_count <= 3`, leave the post in `evaluation_queue` to be retried in the next batch execution.
+  - 8.2.4.3. **Single API Evaluation Call (Hard Limit Constraint):** To strictly enforce that Gemini is called at most once per 5 minutes, the worker must group all selected posts (up to `BATCH_EVAL_CAP`) and evaluate them in a **single Gemini API call**. The worker constructs a single user prompt containing the array of posts (formatted per the User Prompt Template in Section 8.2.6), sends it to the Gemini API, and expects a single JSON array of classification results matching the JSON Output Schema (Section 8.2.3).
+  - 8.2.4.4. **Outcome Routing:** Upon receiving the JSON array response:
+    - 8.2.4.4.1. Iterate through the items in the returned JSON array. Match each classification result to its original queued post using the `uri` field.
+    - 8.2.4.4.2. For each post where `isRelevant == true`, generate the Firestore payload structure (incorporating the parsed media embeds, facets, contexts, score, explanation, and matched rules) and insert a row into the SQLite `posts_outbox` table with `action = 'write'`, `status = 'pending'`.
+    - 8.2.4.4.3. Delete all successfully evaluated posts from `evaluation_queue` (by URI).
+  - 8.2.4.5. **Batch Error & Retry Handling:** If the single Gemini API call fails (due to connection timeout, rate limits, API outage, or JSON array schema mismatch):
+    - 8.2.4.5.1. Increment the `retry_count` for all posts included in that batch within the `evaluation_queue` table.
+    - 8.2.4.5.2. For any post in the batch where `retry_count > 3`, log a failure entry to `processing_failures` with `event_type = 'gemini_call'` and delete it from `evaluation_queue`.
+    - 8.2.4.5.3. For posts where `retry_count <= 3`, keep them in `evaluation_queue` to be processed again during the next batch run.
 
 * 8.2.5. **Statistics Publishing:** Immediately after completing each batch run, and also on a recurring heartbeat timer every 60 seconds, the daemon must update a single statistics document in Cloud Firestore at the path `/stats/backend`. The stats document must contain:
   - 8.2.5.1. `lastActive`: string (ISO-8601 UTC timestamp of the latest heartbeat or update).
@@ -354,14 +357,14 @@ graph TD
 * 8.3. **System Prompt:** The following exact text must be sent as the system instruction to the Gemini model. It must not be modified by the implementing agent.
 
 ```
-You are a relevance filter for an open social web developer feed. Your job is to evaluate social media posts and determine whether they are worth surfacing to a software engineer who is active in the AT Protocol (atproto) and ActivityPub developer ecosystems and works at Google.
+You are a relevance filter for an open social web developer feed. Your job is to evaluate a batch of social media posts and determine whether they are worth surfacing to a software engineer who is active in the AT Protocol (atproto) and ActivityPub developer ecosystems and works at Google.
 
 The engineer wants to:
 - Stay current on technical developments across atproto, ActivityPub, the fediverse, and the broader open/decentralized social web.
 - Find posts worth reading for learning or situational awareness.
 - Find posts with a natural opening to reply — such as technical questions, proposals, pain points, or discussions — where a knowledgeable response would be valuable and help build their reputation in the community.
 
-Evaluate the post based on these criteria:
+Evaluate each post in the input batch based on these criteria:
 
 HIGH RELEVANCE (score 80-100):
 - Someone asking a technical question about atproto, ActivityPub, PDS hosting, Lexicon design, feed generators, federation, or related protocol internals.
@@ -390,35 +393,27 @@ IRRELEVANT (score 0-19, mark isRelevant = false):
 - Culture war or political content that tangentially references decentralized social media.
 
 IMPORTANT RULES:
-- Evaluate the post on its own content merit. Do not factor in who the author is.
+- Evaluate each post on its own content merit. Do not factor in who the author is.
 - If parent or quoted post context is provided, use it to better understand the conversation. A reply that seems vague on its own may be highly relevant in the context of a technical thread.
 - A post routed via a like or repost from someone the engineer follows has already passed a social signal check; still evaluate it on content merit but recognize it reached the pipeline through trusted network activity.
 - When scoring, give higher weight to posts where there is a clear opportunity to respond and add value versus posts that are just interesting to read.
 - Be concise in your reasoning (1-2 sentences).
+- You must return a JSON array containing an evaluation object for every post in the input batch, maintaining the correct URI for each.
 ```
 
-* 8.2.6. **User Prompt Template:** For each post evaluated, construct the user message using the following template. All placeholder values are substituted from the post's parsed data. Optional sections are omitted entirely when the corresponding context is `null`.
+* 8.2.6. **User Prompt Template:** For each batch evaluated, construct the user message as a JSON array of post evaluation requests. For each post, include its URI, text, optional parent/quoted contexts, and its match rules path:
 
-```
-Evaluate this post for relevance:
-
---- POST ---
-{postText}
---- END POST ---
-
-[INCLUDED ONLY IF parentContext IS NOT NULL]
---- PARENT POST (this post is a reply to) ---
-Author: {parentContext.authorHandle}
-{parentContext.text}
---- END PARENT POST ---
-
-[INCLUDED ONLY IF quotedContext IS NOT NULL]
---- QUOTED POST (this post is quoting) ---
-Author: {quotedContext.authorHandle}
-{quotedContext.text}
---- END QUOTED POST ---
-
-Capture path: {matchRules}
+```json
+[
+  {
+    "uri": "{postUri}",
+    "text": "{postText}",
+    "parentContext": {parentContext || null}, // Included as { uri, authorHandle, text } or null
+    "quotedContext": {quotedContext || null}, // Included as { uri, authorHandle, text } or null
+    "capturePath": {matchRules}               // Array of match rule strings
+  },
+  ...
+]
 ```
 
 ---

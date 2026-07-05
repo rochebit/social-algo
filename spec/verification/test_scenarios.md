@@ -307,6 +307,10 @@ These scenarios verify client-side CSS layouts, state transitions, PWA metadata,
     - **Assertion:** The header status dot has amber styling.
   - 7.9.3.3. Case C: Set `lastActive = Date.now() - 600000` (10 minutes ago).
     - **Assertion:** The header status dot has red styling.
+* 7.9.4. **Test Action 4 (Details Modal Toggle & Content):** Click the `#backend-status-dot` in the header, then click the modal backdrop (`#modal-backdrop`).
+  - 7.9.4.1. **Assertion:** Clicking the dot opens the Backend Status Details Modal (`#backend-status-modal`) centered in the viewport.
+  - 7.9.4.2. **Assertion:** The modal correctly displays the parsed metadata from `/stats/backend` (heartbeat, queue size, failures count, batch stats, and recent error text).
+  - 7.9.4.3. **Assertion:** Clicking the backdrop closes the modal, removing `#backend-status-modal` from the active viewport view.
 
 ---
 
