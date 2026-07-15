@@ -38,6 +38,8 @@ The Home Server daemon maintains a persistent WebSocket connection to subscribe 
   - 2.1.3.3. Implement exponential backoff reconnection on disconnection: start at 1s, double up to a maximum of 60s, with a random jitter of ±100ms.
   - 2.1.3.4. When reconnecting, append the `cursor` query parameter with the last saved `seq` value:
     `wss://jetstream2.us-east.bsky.network/subscribe?wantedCollections=app.bsky.feed.post&wantedCollections=app.bsky.graph.follow&wantedCollections=app.bsky.feed.repost&wantedCollections=app.bsky.feed.like&cursor={seq}`
+  - 2.1.3.5. **Expired Cursor Recovery:** If the WebSocket fails to connect with an `Unexpected server response: 400` error (indicating the cursor has expired), the client MUST reset the stored sequence number to `0`, delete the local `cursor.json` file, and reconnect without a cursor (falling back to the live tail).
+  - 2.1.3.6. **WebSocket Liveness Heartbeat:** Since the firehose is highly active, if no message is received for 60 consecutive seconds while the socket state is `OPEN`, the client MUST forcefully terminate the connection (`ws.terminate()`) to trigger the close event handler and initiate reconnection.
 
 ### 2.2 Firestore Document ID Generation Rule
 * 2.2.1. **Hashing Scheme:** Generate a predictable, unique document ID (`postId`) from the ATProto URI.

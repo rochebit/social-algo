@@ -36,13 +36,14 @@ To interact with the Bluesky API for Liking and Following, the app maintains a c
 To prevent posts from shifting or moving while reading, the feed does **not** bind a real-time listener directly to the view. Instead, it uses a manual-refresh pagination model.
 
 ### 3.1 Consistent Score-Sorted Feed Query
-* 3.1.1. **Initialize State:** When `/feed` mounts, record `pageLoadTime = new Date().toISOString()`.
+* 3.1.1. **Initialize State:** When `/feed` mounts, initialize `timeframeFilter = "all"` (default) and record `pageLoadTime = new Date().toISOString()`.
 * 3.1.2. **Execute Static Fetch:** Query Firestore once (`.get()`):
   - 3.1.2.1. **Collection:** `posts`
   - 3.1.2.2. **Filters:**
     - `isDeleted == false`
     - `feedback == null`
     - `matchedAt <= pageLoadTime`
+    - If `timeframeFilter != "all"`, add filter: `matchedAt >= timeframeFilterBoundaryTime` (calculated using `currentTime - SelectedDuration`, e.g., 24 hours, 3 days, or 7 days ago).
   - 3.1.2.3. **Sorting:**
     - First Sort: **`relevanceScore` (Descending)** (shows best posts first)
     - Second Sort: **`matchedAt` (Descending)** (fallback chronological order)
@@ -50,25 +51,55 @@ To prevent posts from shifting or moving while reading, the feed does **not** bi
 * 3.1.3. **Render Feed:** Render this static array. The items remain completely stationary.
 
 ### 3.2 Dynamic Backlog Tracking (Floating Refresh Banner)
-* 3.2.1. **Backlog Listener:** Query the **count** of newer posts where: `isDeleted == false`, `feedback == null`, `matchedAt > pageLoadTime`.
+* 3.2.1. **Backlog Listener:** Establish a real-time listener checking the count of newer posts where:
+  - `isDeleted == false`
+  - `feedback == null`
+  - `matchedAt > pageLoadTime`
+  - If `timeframeFilter != "all"`, add filter: `matchedAt >= timeframeFilterBoundaryTime`.
 * 3.2.2. **Banner Toggle:** If the count returns `N > 0`, display a floating, sticky banner at the top center of the viewport reading: `[ 🗘 Load {N} new posts ]`.
-* 3.2.3. **Click Action:** When clicked, update `pageLoadTime` to the current time, re-run the static query, replace the feed state, and scroll back to the top of the viewport.
+* 3.2.3. **Click Action:** When clicked, update `pageLoadTime` to the current time, re-run the static query (Section 3.1.2), replace the feed state, and scroll back to the top of the viewport.
 
-### 3.3 Real-Time Review Counter
-* 3.3.1. **Query Definition:** The UI establishes a real-time listener snapshot checking the total count of unreviewed items:
+### 3.3 Real-Time Review & Score Bucket Counters
+* 3.3.1. **Query & Real-Time Listener:** To track the remaining review workload, the UI registers a single real-time snapshot listener on the unreviewed posts collection matching the active timeframe filter:
   ```javascript
-  db.collection('posts')
+  let query = db.collection('posts')
     .where('isDeleted', '==', false)
-    .where('feedback', '==', null)
-    .onSnapshot(snapshot => {
-      const totalUnreviewed = snapshot.size;
-      updateUnreviewedCounterUI(totalUnreviewed);
+    .where('feedback', '==', null);
+  
+  if (timeframeFilter !== 'all') {
+    query = query.where('matchedAt', '>=', timeframeFilterBoundaryTime);
+  }
+  
+  query.onSnapshot(snapshot => {
+    // 1. Calculate total unreviewed count
+    const totalUnreviewed = snapshot.size;
+    updateUnreviewedCounterUI(totalUnreviewed);
+    
+    // 2. Aggregate score buckets in memory
+    let counts = { highActionable: 0, high: 0, midHigh: 0, mid: 0, low: 0 };
+    snapshot.forEach(doc => {
+      const score = doc.data().relevanceScore || 0;
+      if (score >= 90 && score <= 100) counts.highActionable++;
+      else if (score >= 80 && score <= 89) counts.high++;
+      else if (score >= 70 && score <= 79) counts.midHigh++;
+      else if (score >= 50 && score <= 69) counts.mid++;
+      else if (score >= 20 && score <= 49) counts.low++;
     });
+    updateScoreBadgesUI(counts);
+  });
   ```
-* 3.3.2. **Visual Placement:** Display the count inside the collapsible side drawer (Section 4.3) adjacent to the `/feed` navigation link (e.g. `Feed ({N})`).
-* 3.3.3. **Dynamic Updates:**
-  - 3.3.3.1. Decrement the counter UI immediately when the user rates a post.
-  - 3.3.3.2. Increment the counter UI immediately when the ingestion daemon syncs a new post match.
+* 3.3.2. **Drawer Placement:** Display the `totalUnreviewed` count inside the collapsible side drawer adjacent to the `/feed` navigation link (e.g. `Feed ({N})`).
+* 3.3.3. **Header Placement (Score Badges):** Render five individual, color-coded mini badges inside the `#header-score-badges` container in the compact header, representing the aggregated bucket counts:
+  - 3.3.3.1. **90–100 Bucket Badge (`#badge-score-90-100`):** Emerald badge (`#10b981`).
+  - 3.3.3.2. **80–89 Bucket Badge (`#badge-score-80-89`):** Teal badge (`#14b8a6`).
+  - 3.3.3.3. **70–79 Bucket Badge (`#badge-score-70-79`):** Amber badge (`#f59e0b`).
+  - 3.3.3.4. **50–69 Bucket Badge (`#badge-score-50-69`):** Orange badge (`#f97316`).
+  - 3.3.3.5. **20–49 Bucket Badge (`#badge-score-20-49`):** Slate badge (`#64748b`).
+  - 3.3.3.6. **Empty Bucket Styling:** If a bucket count is `0`, apply `opacity: 0.3` to the corresponding badge element in the UI to prevent visual clutter while maintaining element layout positions.
+* 3.3.4. **Dynamic Updates:**
+  - 3.3.4.1. Decrement the matching score bucket and total counts immediately when the user rates or skips a post.
+  - 3.3.4.2. Increment the matching score bucket and total counts immediately when the ingestion daemon syncs a new post match.
+  - 3.3.4.3. Re-initialize the listener query dynamically whenever `timeframeFilter` is changed.
 
 ### 3.4 PWA Update & Logo Refresh Action
 * 3.4.1. **Logo Placement:** Render the application logo inside the collapsible side drawer header.
@@ -113,13 +144,17 @@ The top navigation area is minimized to a compact **Header** and an interactive 
 * 4.3.1. **The Compact Header (`#app-header`):**
   - 4.3.1.1. **CSS Layout:** Set header height to `48px`. Flex container: `display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background-color: #0f172a; border-bottom: 1px solid rgba(255,255,255,0.08); z-index: 999;`.
   - 4.3.1.2. **Menu Toggle Button (`#menu-toggle-btn`):** Render a hamburger menu icon (width/height `24px`) on the left to toggle the collapsible side drawer open.
-  - 4.3.1.3. **Backend Status Indicator Dot (`#backend-status-dot`):** Render a small circular status dot (width/height `12px`, rounded corners `50%`) representing the daemon state retrieved from Firestore `/stats/backend`:
-    - 4.3.1.3.1. **Green (Online):** If the current time is within 7 minutes of `lastActive` AND `geminiFailureCount24h == 0`.
-    - 4.3.1.3.2. **Amber (Issues Detected):** If the current time is within 7 minutes of `lastActive` BUT `geminiFailureCount24h > 0` or `lastError != null`.
-    - 4.3.1.3.3. **Red (Offline):** If the current time is more than 7 minutes past `lastActive`.
-    - 4.3.1.3.4. **Tooltip Info:** Provide a native browser tooltip (`title` attribute) listing quick metrics (e.g. `Status: Online | Queue: {queueSize} | Failures: {geminiFailureCount24h}`).
-    - 4.3.1.3.5. **Click Interaction:** Clicking the dot must open the **Backend Status Details Modal** (`#backend-status-modal`) described in Section 4.4.
-  - 4.3.1.4. **Header Cleanliness:** No titles, logo icons, username labels, or full review counts may be visible in the main header space.
+  - 4.3.1.3. **Timeframe Selector (`#timeframe-select`):** Render a styled dropdown selector `<select>` next to the menu toggle button.
+    - 4.3.1.3.1. **Options:** "All" (value `all`, default), "24h" (value `24h`), "3d" (value `3d`), "7d" (value `7d`).
+    - 4.3.1.3.2. **Interaction:** Triggers query re-evaluation, timeframe boundary updates, and counter snapshot re-binding (Section 3.1 & 3.3).
+  - 4.3.1.4. **Score Bucket Badges Container (`#header-score-badges`):** Rendered in the center of the header. Renders five styled indicators representing counts of unreviewed posts matching the active timeframe filter (Section 3.3.3).
+  - 4.3.1.5. **Backend Status Indicator Dot (`#backend-status-dot`):** Render a small circular status dot (width/height `12px`, rounded corners `50%`) representing the daemon state retrieved from Firestore `/stats/backend`:
+    - 4.3.1.5.1. **Green (Online):** If the current time is within 7 minutes of `lastActive` AND `geminiFailureCount24h == 0`.
+    - 4.3.1.5.2. **Amber (Issues Detected):** If the current time is within 7 minutes of `lastActive` BUT `geminiFailureCount24h > 0` or `lastError != null`.
+    - 4.3.1.5.3. **Red (Offline):** If the current time is more than 7 minutes past `lastActive`.
+    - 4.3.1.5.4. **Tooltip Info:** Provide a native browser tooltip (`title` attribute) listing quick metrics (e.g. `Status: Online | Queue: {queueSize} | Failures: {geminiFailureCount24h}`).
+    - 4.3.1.5.5. **Click Interaction:** Clicking the dot must open the **Backend Status Details Modal** (`#backend-status-modal`) described in Section 4.4.
+  - 4.3.1.6. **Header Elements & Cleanliness:** Aside from the menu toggle, timeframe selector, score badges container, and backend status dot, no titles, logo icons, or username labels may be visible in the main header space.
 * 4.3.2. **The Collapsible Side Drawer (`#side-drawer`):**
   - 4.3.2.1. **CSS Layout:** Positioned off-screen by default: `position: fixed; top: 0; left: -280px; width: 280px; height: 100dvh; background: rgba(30, 41, 59, 0.95); backdrop-filter: blur(20px); border-right: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 8px 0 32px rgba(0, 0, 0, 0.5); z-index: 1050; display: flex; flex-direction: column; transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); box-sizing: border-box;`.
   - 4.3.2.2. **Overlay/Backdrop (`#drawer-backdrop`):** Render a semi-transparent screen overlay (`background-color: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); z-index: 1040;`) when the drawer is open. Clicking the backdrop closes the drawer.
