@@ -60,30 +60,32 @@ To deploy, the client repository must contain a `firebase.json` configuration fi
 {
   "indexes": [
     {
-      "collectionGroup": "posts",
+      "collectionGroup": "threads",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "isDeleted", "order": "ASCENDING" },
-        { "fieldPath": "feedback", "order": "ASCENDING" },
-        { "fieldPath": "relevanceScore", "order": "DESCENDING" },
-        { "fieldPath": "matchedAt", "order": "DESCENDING" }
+        { "fieldPath": "hasUnreviewed", "order": "ASCENDING" },
+        { "fieldPath": "maxUnreviewedScore", "order": "DESCENDING" },
+        { "fieldPath": "latestMatchedAt", "order": "DESCENDING" }
       ]
     },
     {
-      "collectionGroup": "posts",
+      "collectionGroup": "threads",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "isDeleted", "order": "ASCENDING" },
-        { "fieldPath": "feedback", "order": "ASCENDING" },
-        { "fieldPath": "matchedAt", "order": "DESCENDING" }
+        { "fieldPath": "hasUnreviewed", "order": "ASCENDING" },
+        { "fieldPath": "latestMatchedAt", "order": "DESCENDING" }
       ]
     },
     {
-      "collectionGroup": "posts",
+      "collectionGroup": "threads",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "feedback", "order": "ASCENDING" },
-        { "fieldPath": "matchedAt", "order": "DESCENDING" }
+        { "fieldPath": "isDeleted", "order": "ASCENDING" },
+        { "fieldPath": "hasUnreviewed", "order": "ASCENDING" },
+        { "fieldPath": "threadFeedback", "order": "ASCENDING" },
+        { "fieldPath": "latestMatchedAt", "order": "DESCENDING" }
       ]
     }
   ],

@@ -38,52 +38,57 @@ To prevent posts from shifting or moving while reading, the feed does **not** bi
 ### 3.1 Consistent Score-Sorted Feed Query
 * 3.1.1. **Initialize State:** When `/feed` mounts, record `pageLoadTime = new Date().toISOString()`.
 * 3.1.2. **Execute Static Fetch:** Query Firestore once (`.get()`):
-  - 3.1.2.1. **Collection:** `posts`
+  - 3.1.2.1. **Collection:** `threads`
   - 3.1.2.2. **Filters:**
     - `isDeleted == false`
-    - `feedback == null`
-    - `matchedAt <= pageLoadTime`
+    - `hasUnreviewed == true`
+    - `latestMatchedAt <= pageLoadTime`
   - 3.1.2.3. **Sorting:**
-    - First Sort: **`relevanceScore` (Descending)** (shows best posts first)
-    - Second Sort: **`matchedAt` (Descending)** (fallback chronological order)
+    - First Sort: **`maxUnreviewedScore` (Descending)** (shows best threads first)
+    - Second Sort: **`latestMatchedAt` (Descending)** (fallback chronological order)
   - 3.1.2.4. **Limit:** Capped at 50 documents.
 * 3.1.3. **Render Feed:** Render this static array. The items remain completely stationary.
 
 ### 3.2 Dynamic Backlog Tracking (Floating Refresh Banner)
-* 3.2.1. **Backlog Listener:** Establish a real-time listener checking the count of newer posts where:
+* 3.2.1. **Backlog Listener:** Establish a real-time listener checking the count of newer thread updates where:
   - `isDeleted == false`
-  - `feedback == null`
-  - `matchedAt > pageLoadTime`
-* 3.2.2. **Banner Toggle:** If the count returns `N > 0`, display a floating, sticky banner at the top center of the viewport reading: `[ 🗘 Load {N} new posts ]`.
+  - `hasUnreviewed == true`
+  - `latestMatchedAt > pageLoadTime`
+* 3.2.2. **Banner Toggle:** If the count returns `N > 0`, display a floating, sticky banner at the top center of the viewport reading: `[ 🗘 Load {N} new threads ]`.
 * 3.2.3. **Click Action:** When clicked, update `pageLoadTime` to the current time, re-run the static query (Section 3.1.2), replace the feed state, and scroll back to the top of the viewport.
 
 ### 3.3 Real-Time Review & Score Bucket Counters
-* 3.3.1. **Query & Real-Time Listener:** To track the remaining review workload, the UI registers a single real-time snapshot listener on the unreviewed posts collection:
+* 3.3.1. **Query & Real-Time Listener:** To track the remaining review workload, the UI registers a single real-time snapshot listener on the unreviewed threads collection:
   ```javascript
-  let query = db.collection('posts')
+  let query = db.collection('threads')
     .where('isDeleted', '==', false)
-    .where('feedback', '==', null);
+    .where('hasUnreviewed', '==', true);
   
   query.onSnapshot(snapshot => {
     // 1. Calculate total unreviewed count
     const totalUnreviewed = snapshot.size;
     updateUnreviewedCounterUI(totalUnreviewed);
     
-    // 2. Aggregate score buckets in memory
+    // 2. Aggregate score buckets in memory from unreviewed posts in all active threads
     let counts = { highActionable: 0, high: 0, midHigh: 0, mid: 0, low: 0 };
     snapshot.forEach(doc => {
-      const score = doc.data().relevanceScore || 0;
-      if (score >= 90 && score <= 100) counts.highActionable++;
-      else if (score >= 80 && score <= 89) counts.high++;
-      else if (score >= 70 && score <= 79) counts.midHigh++;
-      else if (score >= 50 && score <= 69) counts.mid++;
-      else if (score >= 20 && score <= 49) counts.low++;
+      const posts = doc.data().posts || [];
+      posts.forEach(post => {
+        if (post.feedback === null) {
+          const score = post.relevanceScore || 0;
+          if (score >= 90 && score <= 100) counts.highActionable++;
+          else if (score >= 80 && score <= 89) counts.high++;
+          else if (score >= 70 && score <= 79) counts.midHigh++;
+          else if (score >= 50 && score <= 69) counts.mid++;
+          else if (score >= 20 && score <= 49) counts.low++;
+        }
+      });
     });
     updateScoreBadgesUI(counts);
   });
   ```
-* 3.3.2. **Drawer Placement:** Display the `totalUnreviewed` count inside the collapsible side drawer adjacent to the `/feed` navigation link (e.g. `Feed ({N})`).
-* 3.3.3. **Header Placement (Score Badges):** Render five individual, color-coded mini badges inside the `#header-score-badges` container in the compact header, representing the aggregated bucket counts:
+* 3.3.2. **Drawer Placement:** Display the `totalUnreviewed` (threads) count inside the collapsible side drawer adjacent to the `/feed` navigation link (e.g. `Feed ({N})`).
+* 3.3.3. **Header Placement (Score Badges):** Render five individual, color-coded mini badges inside the `#header-score-badges` container in the compact header, representing the aggregated bucket counts of unreviewed posts:
   - 3.3.3.1. **90–100 Bucket Badge (`#badge-score-90-100`):** Emerald badge (`#10b981`).
   - 3.3.3.2. **80–89 Bucket Badge (`#badge-score-80-89`):** Teal badge (`#14b8a6`).
   - 3.3.3.3. **70–79 Bucket Badge (`#badge-score-70-79`):** Amber badge (`#f59e0b`).
@@ -91,7 +96,7 @@ To prevent posts from shifting or moving while reading, the feed does **not** bi
   - 3.3.3.5. **20–49 Bucket Badge (`#badge-score-20-49`):** Slate badge (`#64748b`).
   - 3.3.3.6. **Empty Bucket Styling:** If a bucket count is `0`, apply `opacity: 0.3` to the corresponding badge element in the UI to prevent visual clutter while maintaining element layout positions.
 * 3.3.4. **Dynamic Updates:**
-  - 3.3.4.1. Decrement the matching score bucket and total counts immediately when the user rates or skips a post.
+  - 3.3.4.1. Decrement the matching score bucket and total counts immediately when the user rates or skips a post/thread.
   - 3.3.4.2. Increment the matching score bucket and total counts immediately when the ingestion daemon syncs a new post match.
 
 ### 3.4 PWA Update & Logo Refresh Action
@@ -184,51 +189,58 @@ When the owner clicks the `#backend-status-dot` status indicator dot in the comp
 
 ---
 
-## 5. Extended Feedback & Skip Action Buttons
+## 5. Thread-Level & Post-Level Feedback Mappings
 
-The UI displays four feedback options and one navigation skip option:
+The UI provides action buttons at the bottom of the Thread Card (applying to the thread and all remaining unreviewed posts by default) and minor individual post actions.
 
-```text
-+--------------------------------------------------------+
-|  [ -- ]     [ - ]     [ + ]     [ ++ ]      [ Skip ]   |
-|  Negative  Neutral  Positive  Extra Pos.     Skip      |
-+--------------------------------------------------------+
-```
+### 5.1 Thread-Level Action Bar (Bottom of Thread Card)
+* 5.1.1. **Buttons Rendered:** `[ -- ]` (Negative), `[ - ]` (Neutral), `[ + ]` (Positive), `[ ++ ]` (Extra Positive), and `[ Skip ]`.
+* 5.1.2. **Rating Click Action:** When a thread-level rating button is clicked (e.g. `+`):
+  - 5.1.2.1. Iterate all posts in the thread where `feedback == null` and update their individual post feedback to the selected value (e.g., `feedback = "positive"`, `feedbackAt = new Date().toISOString()`).
+  - 5.1.2.2. Update the top-level thread document:
+    - Set `hasUnreviewed = false`.
+    - Set `maxUnreviewedScore = 0`.
+    - Set `threadFeedback` to the maximum feedback value among all posts in the thread (ordered as: `extra_positive` > `positive` > `neutral` > `negative`).
+  - 5.1.2.3. Pushes the update transaction to Firestore and hides/removes the thread card from the current feed view.
+* 5.1.3. **Skip Click Action:** Clicking the thread-level "Skip" button does not write any feedback to Firestore. It hides the thread card from the current viewport session by adding its ID to local component state.
 
-### 5.1 Button Mappings & Actions
-* 5.1.1. **`--` / Double Minus Icon (Negative):** Saves `feedback = "negative"` in Firestore.
-* 5.1.2. **`-` / Single Minus Icon (Neutral):** Saves `feedback = "neutral"` in Firestore.
-* 5.1.3. **`+` / Single Plus Icon (Positive):** Saves `feedback = "positive"` in Firestore.
-* 5.1.4. **`++` / Double Plus Icon (Extra Positive):** Saves `feedback = "extra_positive"` in Firestore.
-* 5.1.5. **`Skip` Button:** Does not update the `feedback` field in Firestore (remains `null` for later review) and advances the view.
+### 5.2 Minor Individual Post Actions
+* 5.2.1. **Placement:** Render a small "more options" or "ellipsis" icon trigger next to each individual post's score badge.
+* 5.2.2. **Trigger Behavior:** Clicking the trigger displays a minor inline popover containing compact feedback buttons: `[--]`, `[-]`, `[+]`, `[++]`.
+* 5.2.3. **Post-Level Click Action:** Clicking an individual post rating:
+  - 5.2.3.1. Set `feedback = rating_value` and `feedbackAt = timestamp` on that specific post object inside the thread's `posts` array.
+  - 5.2.3.2. Recalculate top-level thread metadata:
+    - If there are still posts in the thread where `feedback == null`, leave `hasUnreviewed = true` and update `maxUnreviewedScore` to the highest score of the remaining unreviewed posts.
+    - If all posts in the thread are now rated, set `hasUnreviewed = false` and `maxUnreviewedScore = 0`.
+    - Update `threadFeedback` to the maximum rating of all posts inside the thread.
+  - 5.2.3.3. Write the updated thread document back to Firestore.
 
 ---
 
-## 6. UI Component Specifications (Post Card)
+## 6. UI Component Specifications (Thread Card)
 
-Every post card renders:
+Instead of individual post cards, the feed renders structured **Thread Cards** that aggregate all matched posts in a conversation tree.
 
-### 6.1 Card Elements & Context Previews
-* 6.1.1. **Header:** Renders author handle and a color-coded relevance score badge.
-* 6.1.2. **Full Parent Thread Resolver:**
-  - 6.1.2.1. **Trigger:** Execute if `parentContext != null`.
-  - 6.1.2.2. **Query:** Fetch the thread hierarchy from the public AppView:
+### 6.1 Thread Card Layout & Nested Post Rendering
+Every Thread Card renders:
+* 6.1.1. **Thread Header:** Renders the root post author handle, a color-coded thread relevance badge (representing `maxUnreviewedScore` if unreviewed posts exist, or the maximum score of the thread), and the overall thread feedback state.
+* 6.1.2. **Chronological Post Stream:** Renders the sequence of matched posts in the thread (`posts` array) in structured chronological order.
+* 6.1.3. **Visual Distinction (Reviewed vs. New/Unreviewed):**
+  - 6.1.3.1. **Reviewed Posts (`feedback != null`):** Apply desaturated/ghosted styling: `opacity: 0.6` background overlay, desaturated colors, and display a small, neat text badge next to the username reading e.g. `[Reviewed: Positive]`.
+  - 6.1.3.2. **New/Unreviewed Posts (`feedback == null`):** Render at full opacity and contrast, highlighted with a distinct left border indicator (`3px solid #6366f1`).
+* 6.1.4. **Full Parent Thread Resolver:**
+  - 6.1.4.1. If any post in the matched sequence is a reply and its full parent context is not natively in the matched list, fetch the missing thread hierarchy from the public AppView:
     `https://api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri={post.uri}&depth=5`
-  - 6.1.2.3. **Zero Truncation Rule:** Render the **entire text** of each ancestor post in the reply chain; line clamping and ellipses are strictly prohibited.
-  - 6.1.2.4. **Ancestor Media Resolution:** If any ancestor post contains media embeds (images, external link cards, or videos), the UI must resolve and render these assets inline directly under the ancestor post's text. Media must be styled and scaled down (e.g., 20% smaller than main post media layout) to preserve visual hierarchy.
-  - 6.1.2.5. **Visual Hierarchy:** Render thin vertical linking lines (e.g. `2px solid #334155`) connecting user avatar icons.
-  - 6.1.2.6. **Default State:** Render the complete thread expanded by default.
-* 6.1.3. **Post Body (Rich Text):** Parse byte offsets using `facets` to construct clickable HTML links.
-* 6.1.4. **Media Embed Box:**
-  - 6.1.4.1. **Images:** Hotlink thumbnail grid directly from CDN.
-  - 6.1.4.2. **External Link Card:** Clickable link preview card.
-  - 6.1.4.3. **Video:** HTML5 `<video>` using native HLS (Safari) or `hls.js` script binding (Chrome/Firefox).
-* 6.1.5. **Quoted Context Preview:** Render a nested card showing the author and text of the quoted post (`quotedContext`).
-* 6.1.6. **Metadata Footer:** Display relative timestamp and the Gemini explanation text.
-* 6.1.7. **Engagement Buttons:** Render active Like button (calls PDS `app.bsky.feed.like`), Follow button (calls PDS `app.bsky.graph.follow`), and Open button (opens `https://bsky.app/profile/{authorDid}/post/{rkey}`).
-* 6.1.8. **Feedback Action Row:**
-  - 6.1.8.1. Desktop: Render inside the card footer (including the feedback options and the Skip button).
-  - 6.1.8.2. Mobile: Exclude from card; routing occurs through the fixed action bar (including the feedback options and the Skip button).
+  - 6.1.4.2. Render ancestor text fully (zero line clamping or truncation).
+* 6.1.5. **Rich Text Facets & Media Embed Box:** Render inline for each individual post in the stream:
+  - 6.1.5.1. **Images:** Hotlink thumbnail grid directly from CDN.
+  - 6.1.5.2. **External Link Card:** Clickable link preview card.
+  - 6.1.5.3. **Video:** HTML5 `<video>` using HLS (`hls.js`).
+* 6.1.6. **Engagement Row:** Each individual post in the stream has its own compact action row rendering Like button, Follow button, and Open button (links to `https://bsky.app/profile/{authorDid}/post/{rkey}`).
+* 6.1.7. **Post Metadata Footer:** Display relative timestamp and Gemini explanation text inline underneath each individual post.
+* 6.1.8. **Bottom Thread Action Bar:**
+  - Desktop: Render inside the Thread Card footer.
+  - Mobile: Render as a fixed bottom overlay bar that targets the active Thread Card.
 
 ---
 

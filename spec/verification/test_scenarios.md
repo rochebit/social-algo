@@ -10,23 +10,23 @@ The following test scenarios must be verified (e.g., using the Firebase Security
 
 ### 1.1 Unauthenticated Read/Write Block
 * 1.1.1. **Test Setup:** Initialize the Firebase client SDK without signing in.
-* 1.1.2. **Test Action 1:** Attempt to perform a read operation on `/posts/test-id`.
+* 1.1.2. **Test Action 1:** Attempt to perform a read operation on `/threads/test-id`.
   - 1.1.2.1. **Expected Result:** The API returns `Permission Denied` (HTTP 403 equivalents).
-* 1.1.3. **Test Action 2:** Attempt to perform a write or update operation to `/posts/test-id` or `/feedback_logs/test-id`.
+* 1.1.3. **Test Action 2:** Attempt to perform a write or update operation to `/threads/test-id` or `/feedback_logs/test-id`.
   - 1.1.3.1. **Expected Result:** The API returns `Permission Denied` (HTTP 403 equivalents).
 
 ### 1.2 Non-Owner Read/Write Block
 * 1.2.1. **Test Setup:** Sign in via Firebase Auth with email `intruder@gmail.com` (not matching the whitelisted owner email).
-* 1.2.2. **Test Action 1:** Attempt to perform a read operation on `/posts/test-id`.
+* 1.2.2. **Test Action 1:** Attempt to perform a read operation on `/threads/test-id`.
   - 1.2.2.1. **Expected Result:** The API returns `Permission Denied`.
-* 1.2.3. **Test Action 2:** Attempt to perform a write or update operation to `/posts/test-id` or `/feedback_logs/test-id`.
+* 1.2.3. **Test Action 2:** Attempt to perform a write or update operation to `/threads/test-id` or `/feedback_logs/test-id`.
   - 1.2.3.1. **Expected Result:** The API returns `Permission Denied`.
 
 ### 1.3 Owner Read/Write Access
 * 1.3.1. **Test Setup:** Sign in via Firebase Auth with email matching the exact whitelist (e.g., `owner@gmail.com`).
-* 1.3.2. **Test Action 1:** Attempt to perform a read query on `/posts`.
+* 1.3.2. **Test Action 1:** Attempt to perform a read query on `/threads`.
   - 1.3.2.1. **Expected Result:** The query succeeds and returns documents.
-* 1.3.3. **Test Action 2:** Attempt to update a post's `feedback` field.
+* 1.3.3. **Test Action 2:** Attempt to update a thread's `threadFeedback` field.
   - 1.3.3.1. **Expected Result:** The write operation succeeds.
 
 ---
@@ -238,27 +238,27 @@ These scenarios verify client-side CSS layouts, state transitions, PWA metadata,
 ### 7.2 Stable Viewport & Score Sorting Verification
 * 7.2.1. **Test Action:** Inspect the Firestore query executed by the feed component.
 * 7.2.2. **Assertions:**
-  - 7.2.2.1. The query strictly specifies order rules: `.orderBy('relevanceScore', 'desc').orderBy('matchedAt', 'desc')`.
-  - 7.2.2.2. Refreshing the feed fetches posts in this identical relevance-first order.
-  - 7.2.2.3. The timeline stays static; background-added posts trigger the floating sticky banner `[ 🗘 Load 1 new posts ]` instead of inserting themselves.
+  - 7.2.2.1. The query strictly specifies order rules: `.orderBy('maxUnreviewedScore', 'desc').orderBy('latestMatchedAt', 'desc')`.
+  - 7.2.2.2. Refreshing the feed fetches threads in this identical relevance-first order.
+  - 7.2.2.3. The timeline stays static; background-added thread updates trigger the floating sticky banner `[ 🗘 Load 1 new threads ]` instead of inserting themselves.
 
 ### 7.3 Real-Time Review Counter
 * 7.3.1. **Test Action:** Open the collapsible side drawer and monitor the unreviewed counter adjacent to the Feed link.
-  - 7.3.1.1. Increment check: Trigger ingestion daemon write of a new unreviewed post to Firestore.
-  - 7.3.1.2. Decrement check: Click the `+` rating button on a card.
+  - 7.3.1.1. Increment check: Trigger ingestion daemon write of a new unreviewed thread to Firestore.
+  - 7.3.1.2. Decrement check: Click the `+` rating button on a thread card footer.
 * 7.3.2. **Assertions:**
-  - 7.3.2.1. When the new post is written, the unreviewed badge count inside the side drawer immediately increments by 1.
-  - 7.3.2.2. When the card is rated, the unreviewed badge count inside the side drawer immediately decrements by 1.
+  - 7.3.2.1. When the new thread is written, the unreviewed badge count inside the side drawer immediately increments by 1.
+  - 7.3.2.2. When the thread card is rated, the unreviewed badge count inside the side drawer immediately decrements by 1.
 
 ### 7.4 Full parent Thread conversation
-* 7.4.1. **Test Setup:** Load a reply post card where `parentContext` is present.
-  - 7.4.1.1. Mock response from `app.bsky.feed.getPostThread?uri={post.uri}` returning 3 nested ancestor posts (Grandparent, Parent, Child), with the Parent containing an image embed.
+* 7.4.1. **Test Setup:** Load a reply post within a thread card.
+  - 7.4.1.1. Mock response from `app.bsky.feed.getPostThread?uri={post.uri}` returning nested ancestor posts.
 * 7.4.2. **Assertions:**
-  - 7.4.2.1. UI triggers AppView fetch for the thread.
-  - 7.4.2.2. UI renders all 3 ancestor posts in vertical order above the child post.
+  - 7.4.2.1. UI triggers AppView fetch for missing parent context threads.
+  - 7.4.2.2. UI renders all ancestor posts in vertical order above the child post.
   - 7.4.2.3. All text content within each ancestor post is fully rendered (zero line clamping, zero string truncation).
   - 7.4.2.4. Vertical connection lines align between user avatars.
-  - 7.4.2.5. The image embed in the Parent post resolves and is displayed inline below its body text, scaled down by 20% compared to main post media cards.
+  - 7.4.2.5. Ancestor media resolves and is displayed inline below its body text, scaled down by 20%.
 
 ### 7.5 Mobile Fullscreen Layout
 * 7.5.1. **Test Setup:** Set browser window viewport sizes to simulate a Pixel 10 Pro XL (width `412px`, height `915px`), with mock system notch safe area variables (`env(safe-area-inset-top)` set to `44px` and `env(safe-area-inset-bottom)` set to `34px`).
@@ -269,7 +269,7 @@ These scenarios verify client-side CSS layouts, state transitions, PWA metadata,
   - 7.5.2.4. The active card's viewport height matches the computation: `calc(100dvh - 48px - 72px - env(safe-area-inset-top) - env(safe-area-inset-bottom))` (reflecting minimized 48px header).
   - 7.5.2.5. The active card scroll container enables internal scrolling (`overflow-y: auto`) and defines a bottom buffer (`padding-bottom: 80px`).
   - 7.5.2.6. The bottom action bar clears the swipe indicators: `height: calc(72px + env(safe-area-inset-bottom))` with a padding bottom of `env(safe-area-inset-bottom)`.
-  - 7.5.2.7. Only **one** post card is rendered in the viewport (matching `posts[activePostIndex]`).
+  - 7.5.2.7. Only **one** thread card is rendered in the viewport (matching `threads[activePostIndex]`).
   - 7.5.2.8. Clicking any action button increments `activePostIndex` to `1`, transitioning card `0` out and card `1` in.
   - 7.5.2.9. Action bar does not shift height or overlap content area.
 
@@ -282,10 +282,10 @@ These scenarios verify client-side CSS layouts, state transitions, PWA metadata,
 ### 7.7 Skip Button Viewport Actions
 * 7.7.1. **Mobile Skip Verification:** Click the "Skip" button in the bottom action bar on mobile.
   - 7.7.1.1. **Assertion:** The view transitions to card `1` by incrementing `activePostIndex = 1`.
-  - 7.7.1.2. **Assertion:** Assert that no update request is sent to Firestore and the `feedback` field for card `0` remains `null`.
-* 7.7.2. **Desktop Skip Verification:** Click the "Skip" button on a card in desktop view.
+  - 7.7.1.2. **Assertion:** Assert that no update request is sent to Firestore and the `posts` array feedback remains unmodified.
+* 7.7.2. **Desktop Skip Verification:** Click the "Skip" button on a thread card in desktop view.
   - 7.7.2.1. **Assertion:** The card is removed from the DOM.
-  - 7.7.2.2. **Assertion:** Assert that no update request is sent to Firestore and the `feedback` field remains `null`.
+  - 7.7.2.2. **Assertion:** Assert that no update request is sent to Firestore and the `posts` array feedback remains unmodified.
 
 ### 7.8 PWA Logo Click Hard Reload
 * 7.8.1. **Test Action:** Open the collapsible side drawer, and click the application logo element in the drawer header (or click "Check for Updates" inside the drawer).
@@ -321,39 +321,37 @@ These scenarios verify client-side CSS layouts, state transitions, PWA metadata,
   - 7.10.2.1. Verify that the batch worker aggregates exactly 50 events for the 1-hour metrics window.
   - 7.10.2.2. Verify that the batch worker aggregates exactly 80 events for the 24-hour metrics window.
   - 7.10.2.3. Verify that the pruning query runs and successfully deletes the 20 events older than 24 hours (Case C) from the SQLite database.
-  - 7.10.2.4. Verify that `/stats/backend` in Firestore is updated with the correct 1-hour and 24-hour throughput values.
-
-### 7.11 User Engagement Signal Deduplication & False Negative Capture
+  - 7.10.2.4. Verify that `/stats/backend` in Firestore is updated with the correct 1-hour and 24-hour throughput values.### 7.11 User Engagement Signal Deduplication & False Negative Capture
 * 7.11.1. **Test Action 1 (User Action Capture):** Inject a Jetstream write event for `app.bsky.feed.like` created by `USER_DID` targeting a post URI not yet present in Firestore.
   - 7.11.1.1. **Assertion:** Verify that the daemon resolves the post via AppView XRPC.
-  - 7.11.1.2. **Assertion:** Verify that the post is written to Firestore with `feedback = "interacted"` and `version` matching the current backend version.
-  - 7.11.1.3. **Assertion:** Verify that this post does not appear in the unreviewed frontend feed due to the `feedback` attribute not being null.
-* 7.11.2. **Test Action 2 (Existing Post Engagement):** Inject a Jetstream user engagement event targeting an existing Firestore post that has a `null` feedback rating.
-  - 7.11.2.1. **Assertion:** Verify that the document's feedback rating is updated to `"interacted"`.
-  - 7.11.2.2. **Assertion:** Verify that the post is immediately hidden from the feed timeline.
+  - 7.11.1.2. **Assertion:** Verify that a thread document is created or updated in Firestore containing this post inside its `posts` array, with its feedback set to `"interacted"` and `version` matching the current backend version.
+  - 7.11.1.3. **Assertion:** Verify that this thread is not presented as an unreviewed card if it does not contain other unreviewed posts.
+* 7.11.2. **Test Action 2 (Existing Post Engagement):** Inject a Jetstream user engagement event targeting an existing Firestore post within a thread document that has a `null` feedback rating.
+  - 7.11.2.1. **Assertion:** Verify that the specific post's feedback rating inside the thread's `posts` array is updated to `"interacted"`.
+  - 7.11.2.2. **Assertion:** Verify that if this was the last unreviewed post in the thread, the thread's `hasUnreviewed` flag is immediately set to `false`, hiding the thread card from the feed timeline.
 
 ### 7.12 Version & Deployment Shift Verification
-* 7.12.1. **Test Action 1 (Backend Version Tag):** Query the `/posts` collection in Firestore.
-  - 7.12.1.1. **Assertion:** Assert that every post written contains a `version` attribute matching the active environment config version (e.g. `"v1.0.0"`).
+* 7.12.1. **Test Action 1 (Backend Version Tag):** Query the `/threads` collection in Firestore.
+  - 7.12.1.1. **Assertion:** Assert that every thread written contains a `version` attribute matching the active environment config version (e.g. `"v2.0.0"`).
 * 7.12.2. **Test Action 2 (Feedback Log Version Tag):** Submit a feedback rating in the frontend app.
   - 7.12.2.1. **Assertion:** Assert that the generated `feedback_logs` entry contains a `version` attribute matching the frontend build version.
-* 7.12.3. **Test Action 3 (Startup Deployment Log):** Change the `SYSTEM_VERSION` env key on the backend to `"v1.1.0"` and restart the daemon.
-  - 7.12.3.1. **Assertion:** Verify that a new document is written to the Firestore `/deployments` collection containing `"version": "v1.1.0"` and the active parameter configurations.
+* 7.12.3. **Test Action 3 (Startup Deployment Log):** Change the `SYSTEM_VERSION` env key on the backend to `"v2.0.0"` and restart the daemon.
+  - 7.12.3.1. **Assertion:** Verify that a new document is written to the Firestore `/deployments` collection containing `"version": "v2.0.0"` and the active parameter configurations.
 
 ---
 
 ### 7.13 Firestore 24-Hour Document Pruning Verification
-* 7.13.1. **Test Setup:** Populate Cloud Firestore with 3 mock post documents:
-  - Post A: `matchedAt` set to 12 hours ago (within 24-hour window).
-  - Post B: `matchedAt` set to 25 hours ago (outside 24-hour window).
-  - Post C: `matchedAt` set to 30 hours ago (outside 24-hour window).
+* 7.13.1. **Test Setup:** Populate Cloud Firestore with 3 mock thread documents:
+  - Thread A: `latestMatchedAt` set to 12 hours ago (within 24-hour window).
+  - Thread B: `latestMatchedAt` set to 25 hours ago (outside 24-hour window).
+  - Thread C: `latestMatchedAt` set to 30 hours ago (outside 24-hour window).
 * 7.13.2. **Test Action:** Trigger the background pruning task in the daemon.
 * 7.13.3. **Assertions:**
-  - 7.13.3.1. Post A remains in Firestore.
-  - 7.13.3.2. Post B and Post C are successfully deleted from Cloud Firestore.
+  - 7.13.3.1. Thread A remains in Firestore.
+  - 7.13.3.2. Thread B and Thread C are successfully deleted from Cloud Firestore.
   - 7.13.3.3. Historical records in `feedback_logs` are NOT deleted or modified.
 
----
+------
 
 ## 8. Implementing Agent Verification & Testing Guidelines
 

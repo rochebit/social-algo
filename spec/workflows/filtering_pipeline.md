@@ -507,10 +507,40 @@ An asynchronous background task within the daemon runs continuously to push loca
 * 10.1.1. Query SQLite `posts_outbox` for items where `status = 'pending'` or `status = 'failed'` ordered by `created_at` ASC.
 * 10.1.2. Process each returned item:
   - 10.1.2.1. **Case A: `action == 'write'`**
-    - 10.1.2.1.1. Parse the `payload` JSON string.
-    - 10.1.2.1.2. Call the Firestore SDK to write/upsert the document: `db.collection('posts').doc(post_id).set(payload_object)`.
+    - 10.1.2.1.1. Parse the incoming post `payload` JSON.
+    - 10.1.2.1.2. Determine the thread's root post URI (`rootUri`). If the post has no parent, `rootUri` is the post's own URI.
+    - 10.1.2.1.3. Calculate the unique `threadId` as `SHA-256(rootUri)`.
+    - 10.1.2.1.4. Query Firestore to read the existing document: `db.collection('threads').doc(threadId).get()`.
+    - 10.1.2.1.5. **If the thread document does not exist:**
+      - Create a new thread document payload:
+        ```json
+        {
+          "rootUri": rootUri,
+          "latestMatchedAt": payload.matchedAt,
+          "hasUnreviewed": (payload.feedback == null),
+          "maxUnreviewedScore": (payload.feedback == null ? payload.relevanceScore : 0),
+          "threadFeedback": payload.feedback,
+          "isDeleted": false,
+          "posts": [ payload ],
+          "version": "v2.0.0"
+        }
+        ```
+      - Call Firestore: `db.collection('threads').doc(threadId).set(new_thread_object)`.
+    - 10.1.2.1.6. **If the thread document exists:**
+      - Inspect the existing `posts` array. If a post with the same `uri` is already present, skip appending.
+      - Otherwise, append the new post payload to the `posts` array.
+      - Sort the updated `posts` array chronologically by `createdAt`.
+      - Recalculate top-level metadata:
+        - `latestMatchedAt = max(existing.latestMatchedAt, payload.matchedAt)`.
+        - Count posts where `feedback == null`. If count > 0: `hasUnreviewed = true`, and `maxUnreviewedScore = max(relevanceScore of all unreviewed posts)`. If count == 0: `hasUnreviewed = false`, and `maxUnreviewedScore = 0`.
+        - `threadFeedback = (hasUnreviewed ? null : max feedback rating of all posts)`.
+      - Call Firestore: `db.collection('threads').doc(threadId).set(updated_thread_object)`.
   - 10.1.2.2. **Case B: `action == 'delete'`**
-    - 10.1.2.2.1. Call the Firestore SDK to soft-delete the document: `db.collection('posts').doc(post_id).update({ isDeleted: true })`.
+    - 10.1.2.2.1. Calculate `threadId` using the post's root URI hash.
+    - 10.1.2.2.2. Fetch the thread document from Firestore.
+    - 10.1.2.2.3. Update the matching post inside the `posts` array to set `isDeleted = true`.
+    - 10.1.2.2.4. If all posts inside the thread are deleted, update the top-level thread document to set `isDeleted = true`.
+    - 10.1.2.2.5. Write the updated document back to Firestore.
   - 10.1.2.3. **On Success:** Delete the row from the local `posts_outbox` table.
   - 10.1.2.4. **On Failure:**
     - 10.1.2.4.1. Increment the `retry_count` in the SQLite table.
@@ -525,8 +555,8 @@ An asynchronous background task within the daemon runs continuously to push loca
 * 10.3.1. **Execution Interval:** Run as a background task every 1 hour (3600 seconds) inside the daemon.
 * 10.3.2. **Pruning Action:**
   - 10.3.2.1. Calculate the pruning threshold boundary time as `now - 24 hours` in ISO-8601 format.
-  - 10.3.2.2. Query Cloud Firestore to retrieve all documents in the `posts` collection where `matchedAt` is strictly less than this boundary time:
-    `db.collection('posts').where('matchedAt', '<', boundaryTime)`
+  - 10.3.2.2. Query Cloud Firestore to retrieve all documents in the `threads` collection where `latestMatchedAt` is strictly less than this boundary time:
+    `db.collection('threads').where('latestMatchedAt', '<', boundaryTime)`
   - 10.3.2.3. For each document returned, execute a delete call to permanently remove the document from Firestore.
   - 10.3.2.4. **Retention Boundary:** Do NOT delete or modify documents in the `feedback_logs` collection. Those remain intact for historical training/analysis.
 
@@ -539,7 +569,38 @@ An asynchronous background task within the daemon runs continuously to push loca
 
 ---
 
-## 12. Assumptions Log
+---
+
+## 12. Local Backend Data Migration Script (v1.0.0 to v2.0.0)
+
+A one-time migration script must be provided to migrate existing unreviewed and rated posts from the v1.0.0 flat model to the v2.0.0 root-post-centric thread model using local backend logs and SQLite.
+
+### 12.1 Backup phase
+* 12.1.1. **Firestore Backup:** Export or copy `/posts` and `/feedback_logs` collections to local JSON files (`backup_posts.json` and `backup_feedback.json`) before executing modifications.
+* 12.1.2. **SQLite Backup:** Create a copy of the SQLite database file: `cp network_graph.db network_graph.db.bak`.
+
+### 12.2 Migration Execution Logic
+* 12.2.1. **Source Data Retrieval:** Read all posts from the local feedback log `./data/feedback_archive.jsonl` and all posts currently stored in Firestore `/posts` (if any are unreviewed).
+* 12.2.2. **Thread Resolution & Grouping:**
+  - 12.2.2.1. Group all retrieved posts by their conversation root post URI (`rootUri`).
+  - 12.2.2.2. If a post's `rootUri` is not stored, resolve it by traversing `reply.root.uri` or query the public AppView XRPC `getPosts` endpoint to resolve the hierarchy.
+* 12.2.3. **Thread Consolidation:** For each resolved root conversation:
+  - 12.2.3.1. Create a `threads` document payload. Set `threadId = SHA-256(rootUri)`.
+  - 12.2.3.2. Assemble all posts associated with this thread into the `posts` array, sorted chronologically by `createdAt`.
+  - 12.2.3.3. Retain the historical `feedback` and `feedbackAt` values for each post.
+  - 12.2.3.4. Calculate the top-level fields:
+    - Set `latestMatchedAt` to the maximum `matchedAt` timestamp among all posts in the thread.
+    - Set `hasUnreviewed = true` if any post has `feedback == null`, otherwise `false`.
+    - Set `maxUnreviewedScore` to the maximum `relevanceScore` of all posts where `feedback == null`, or `0` if all are rated.
+    - Set `threadFeedback` to the maximum rating of all rated posts if `hasUnreviewed == false`, or `null`.
+* 12.2.4. **Writing to Firestore:**
+  - 12.2.4.1. Write each constructed thread document to `/threads/{threadId}` in Firestore.
+* 12.2.5. **Cleanup:**
+  - 12.2.5.1. Delete the old `/posts` collection from Firestore.
+
+---
+
+## 13. Assumptions Log
 
 | ID | Description | Status | Resolution / Date |
 |---|---|---|---|

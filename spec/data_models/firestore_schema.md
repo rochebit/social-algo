@@ -7,65 +7,74 @@ This document specifies the Firestore database structure, document schemas, inde
 ## 1. Firestore Schema & Collections
 
 We utilize two primary collections and a statistics collection containing a singleton document in Firestore:
-* 1.1. `posts`: Represents the filtered feed items matching developer keywords or network parameters.
+* 1.1. `threads`: Represents threads of filtered feed items matching developer keywords or network parameters.
 * 1.2. `feedback_logs`: Archives all rating events with metadata to support offline analysis.
 * 1.3. `stats`: Contains a single backend status monitoring document.
 
 ---
 
-### 1.1 `posts` Collection
+### 1.1 `threads` Collection
 
-* 1.1.1. **Path:** `/posts/{postId}`
-* 1.1.2. **Document ID (`postId`):** Generate as the `SHA-256` hash of the post's ATProto URI string.
+* 1.1.1. **Path:** `/threads/{threadId}`
+* 1.1.2. **Document ID (`threadId`):** Generate as the `SHA-256` hash of the conversation's root post ATProto URI string.
 * 1.1.3. **Document Schema JSON Model:**
 ```json
 {
-  "uri": "at://did:plc:rpqw572o3uowvjscsps5u7e6/app.bsky.feed.post/3ks5z3a2jzk2c",
-  "cid": "bafyreihymx...",
-  "authorDid": "did:plc:rpqw572o3uowvjscsps5u7e6",
-  "authorHandle": "devguy.bsky.social",
-  "text": "Check out this new ATProto AppView implementation in Rust! https://github.com/... #atproto",
-  "createdAt": "2026-07-01T11:45:00.000Z",
-  "matchedAt": "2026-07-01T11:45:05.123Z",
-  "relevanceScore": 85,
-  "relevanceExplanation": "Post mentions ATProto AppView implementation in Rust with a link to source code.",
-  "matchRules": ["keyword:atproto", "keyword:appview"],
-  "feedback": "positive", 
-  "feedbackAt": "2026-07-01T11:50:00.000Z",
+  "rootUri": "at://did:plc:rpqw572o3uowvjscsps5u7e6/app.bsky.feed.post/3ks5z3a2jzk2c",
+  "latestMatchedAt": "2026-07-01T11:45:05.123Z",
+  "hasUnreviewed": true,
+  "maxUnreviewedScore": 85,
+  "threadFeedback": null,
   "isDeleted": false,
-  "parentContext": {
-    "uri": "at://did:plc:anotherdev/app.bsky.feed.post/999",
-    "authorHandle": "seniorguy.bsky.social",
-    "text": "Has anyone tried building an AppView in Rust yet?"
-  },
-  "quotedContext": null,
-  "facets": [
+  "posts": [
     {
-      "start": 58,
-      "end": 79,
-      "type": "link",
-      "uri": "https://github.com/..."
-    },
-    {
-      "start": 80,
-      "end": 89,
-      "type": "tag",
-      "tag": "atproto"
+      "uri": "at://did:plc:rpqw572o3uowvjscsps5u7e6/app.bsky.feed.post/3ks5z3a2jzk2c",
+      "cid": "bafyreihymx...",
+      "authorDid": "did:plc:rpqw572o3uowvjscsps5u7e6",
+      "authorHandle": "devguy.bsky.social",
+      "text": "Check out this new ATProto AppView implementation in Rust! https://github.com/... #atproto",
+      "createdAt": "2026-07-01T11:45:00.000Z",
+      "matchedAt": "2026-07-01T11:45:05.123Z",
+      "relevanceScore": 85,
+      "relevanceExplanation": "Post mentions ATProto AppView implementation in Rust with a link to source code.",
+      "matchRules": ["keyword:atproto", "keyword:appview"],
+      "feedback": null, 
+      "feedbackAt": null,
+      "parentContext": {
+        "uri": "at://did:plc:anotherdev/app.bsky.feed.post/999",
+        "authorHandle": "seniorguy.bsky.social",
+        "text": "Has anyone tried building an AppView in Rust yet?"
+      },
+      "quotedContext": null,
+      "facets": [
+        {
+          "start": 58,
+          "end": 79,
+          "type": "link",
+          "uri": "https://github.com/..."
+        },
+        {
+          "start": 80,
+          "end": 89,
+          "type": "tag",
+          "tag": "atproto"
+        }
+      ],
+      "mediaEmbed": {
+        "type": "images",
+        "images": [
+          {
+            "thumbUrl": "https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:rpqw572o3uowvjscsps5u7e6/bafyimgcid@jpeg",
+            "fullsizeUrl": "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:rpqw572o3uowvjscsps5u7e6/bafyimgcid@jpeg",
+            "alt": "Screenshot of build log"
+          }
+        ],
+        "externalLink": null,
+        "video": null
+      }
     }
   ],
-  "mediaEmbed": {
-    "type": "images",
-    "images": [
-      {
-        "thumbUrl": "https://cdn.bsky.app/img/feed_thumbnail/plain/did:plc:rpqw572o3uowvjscsps5u7e6/bafyimgcid@jpeg",
-        "fullsizeUrl": "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:rpqw572o3uowvjscsps5u7e6/bafyimgcid@jpeg",
-        "alt": "Screenshot of build log"
-      }
-    ],
-    "externalLink": null,
-    "video": null
-  },
-  "version": "v1.0.0"
+  "version": "v2.0.0"
 }
 ```
 
@@ -73,24 +82,14 @@ We utilize two primary collections and a statistics collection containing a sing
 
 | ID | Field Name | Type | Description |
 |---|---|---|---|
-| 1.1.4.1 | `uri` | string | The full AT Protocol URI of the post. |
-| 1.1.4.2 | `cid` | string | The IPFS CID of the post record. |
-| 1.1.4.3 | `authorDid` | string | The decentralized identifier of the post author. |
-| 1.1.4.4 | `authorHandle` | string | The current handle of the post author at matching time. |
-| 1.1.4.5 | `text` | string | The textual content of the post. |
-| 1.1.4.6 | `createdAt` | string (ISO-8601 UTC) | The creation timestamp defined by the post author. |
-| 1.1.4.7 | `matchedAt` | string (ISO-8601 UTC) | The ingestion timestamp when the home server processed the post. |
-| 1.1.4.8 | `relevanceScore` | number | A score between `0` and `100` generated by the LLM classification step. |
-| 1.1.4.9 | `relevanceExplanation`| string | The natural language reasoning provided by the LLM. |
-| 1.1.4.10 | `matchRules` | array of strings | List of regex/rule patterns triggered prior to LLM evaluation. |
-| 1.1.4.11 | `feedback` | string or null | Whitelisted user ratings: `"negative"`, `"neutral"`, `"positive"`, `"extra_positive"`, or `null`. |
-| 1.1.4.12 | `feedbackAt` | string (ISO-8601 UTC) or null | Timestamp of when the user submitted the feedback. |
-| 1.1.4.13 | `isDeleted` | boolean | Set to `true` if the post is deleted on Bluesky. Defaults to `false`. |
-| 1.1.4.14 | `parentContext` | object or null | Context of the post being replied to. Null if not a reply. |
-| 1.1.4.15 | `quotedContext` | object or null | Context of the post quoted/embedded. Null if not a quote. |
-| 1.1.4.16 | `facets` | array of objects | Extracted rich-text features. Each contains byte range (`start`, `end`) and type specifics (`uri` or `tag`). |
-| 1.1.4.17 | `mediaEmbed` | object | Media assets associated with the post. Contains sub-objects `images` (array), `externalLink` (object), and `video` (object). |
-| 1.1.4.18 | `version` | string | The version tag of the system that processed this post. |
+| 1.1.4.1 | `rootUri` | string | The full AT Protocol URI of the thread's root post. |
+| 1.1.4.2 | `latestMatchedAt` | string (ISO-8601 UTC) | The ingestion timestamp of the most recently matched post in this thread. |
+| 1.1.4.3 | `hasUnreviewed` | boolean | Set to `true` if the thread contains one or more posts where `feedback == null`. |
+| 1.1.4.4 | `maxUnreviewedScore`| number | The highest relevance score among all unreviewed posts in the thread. Returns `0` if all are rated. |
+| 1.1.4.5 | `threadFeedback` | string or null | Consolidated rating for the entire thread (representing the maximum rating applied, or `null`). |
+| 1.1.4.6 | `isDeleted` | boolean | Set to `true` if the entire thread is deleted. Defaults to `false`. |
+| 1.1.4.7 | `posts` | array of objects | Nested array of posts belonging to this thread that passed relevance filtering. |
+| 1.1.4.8 | `version` | string | The version tag of the system that processed this thread (e.g. `"v2.0.0"`). |
 
 ---
 
@@ -102,10 +101,10 @@ We utilize two primary collections and a statistics collection containing a sing
 
 | ID | Field Name | Type | Description |
 |---|---|---|---|
-| 1.2.3.1 | `postId` | string | The SHA-256 document ID of the associated post in the `posts` collection. |
-| 1.2.3.2 | `postUri` | string | The full AT Protocol URI of the post. |
+| 1.2.3.1 | `threadId` | string | The SHA-256 document ID of the associated thread. |
+| 1.2.3.2 | `postUri` | string | The full AT Protocol URI of the specific post rated. |
 | 1.2.3.3 | `authorDid` | string | The decentralized identifier of the post author. |
-| 1.2.3.4 | `feedback` | string | The feedback rating provided by the owner (`"negative"`, `"neutral"`, `"positive"`, `"extra_positive"`). |
+| 1.2.3.4 | `feedback` | string | The feedback rating provided (`"negative"`, `"neutral"`, `"positive"`, `"extra_positive"`, `"superseded"`, or `"interacted"`). |
 | 1.2.3.5 | `submittedAt` | string (ISO-8601 UTC) | Timestamp of when the user submitted the feedback rating. |
 | 1.2.3.6 | `userEmail` | string | Whitelisted email address of the administrator who submitted the feedback. |
 | 1.2.3.7 | `version` | string | The version tag of the frontend/system active at the time the feedback was logged. |
@@ -137,7 +136,7 @@ We utilize two primary collections and a statistics collection containing a sing
   "lastFirehosePostAt": "2026-07-05T10:54:58.123Z",
   "lastPassedStage1At": "2026-07-05T10:54:30.456Z",
   "lastPassedStage2At": "2026-07-05T10:50:00.000Z",
-  "version": "v1.0.0"
+  "version": "v2.0.0"
 }
 ```
 * 1.3.4. **Document Fields Schema:**
@@ -150,7 +149,7 @@ We utilize two primary collections and a statistics collection containing a sing
 | 1.3.4.4 | `geminiFailureCount24h` | number | Count of Gemini API call failures logged in the last 24 hours. |
 | 1.3.4.5 | `lastBatchProcessedCount` | number | Number of posts selected for the last batch evaluation run. |
 | 1.3.4.6 | `lastBatchSuccessCount` | number | Number of posts successfully classified (either relevant or irrelevant) in the last batch run. |
-| 1.3.4.7 | `lastBatchRelevantCount` | number | Number of posts classified as relevant and pushed to Firestore in the last batch run. |
+| 1.3.4.7 | `lastBatchRelevantCount` | number | Number of posts from the batch that were found relevant and written to the outbox. |
 | 1.3.4.8 | `lastError` | string or null | Error details of the last logged processing failure, or null if none. |
 | 1.3.4.9 | `backendStatus` | string | Hardcoded status representing backend presence (`"online"`). |
 | 1.3.4.10 | `firehoseCount1h` & `firehoseCount24h` | number | Ingested post counts from the Jetstream firehose in the last 1 and 24 hours. |
@@ -168,7 +167,7 @@ We utilize two primary collections and a statistics collection containing a sing
 * 1.4.3. **Document Schema JSON Model:**
 ```json
 {
-  "version": "v1.0.0",
+  "version": "v2.0.0",
   "deployedAt": "2026-07-05T14:00:00.000Z",
   "environment": "backend",
   "model": "gemini-3.1-flash-lite",
@@ -193,16 +192,16 @@ We utilize two primary collections and a statistics collection containing a sing
 
 ## 2. Required Indexes
 
-To query the feed efficiently on the client (retrieving posts by score with fallback chronological tie-breakers), the following indexes must be provisioned in Firebase:
+To query the feed efficiently on the client, the following indexes must be provisioned in Firebase:
 
 ### 2.1 Single-field Indexes
-* 2.1.1. **Collection:** `posts`
-  - Field: `matchedAt` (Descending)
+* 2.1.1. **Collection:** `threads`
+  - Field: `latestMatchedAt` (Descending)
 
 ### 2.2 Composite Indexes
-* 2.2.1. **Collection:** `posts`
-  - Fields: `isDeleted` (Ascending), `feedback` (Ascending), `relevanceScore` (Descending), `matchedAt` (Descending)
-  - Purpose: Retrieve all active, unrated posts sorted consistently by relevance score first, then matched time.
+* 2.2.1. **Collection:** `threads`
+  - Fields: `isDeleted` (Ascending), `hasUnreviewed` (Ascending), `maxUnreviewedScore` (Descending), `latestMatchedAt` (Descending)
+  - Purpose: Retrieve all threads containing unreviewed posts, sorted by the highest unreviewed score first, then matching time.
 
 ---
 
