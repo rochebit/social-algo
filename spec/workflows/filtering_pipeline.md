@@ -521,6 +521,15 @@ An asynchronous background task within the daemon runs continuously to push loca
 * 10.2.1. **Delay Algorithm:** Use exponential backoff with jitter:
   `delay = min(5000 * (1.5 ^ retry_count), 300000) + random_jitter_ms` (Starts at 5s, doubles up to a maximum delay of 5 minutes).
 
+### 10.3 Firestore 24-Hour Document Pruning Task
+* 10.3.1. **Execution Interval:** Run as a background task every 1 hour (3600 seconds) inside the daemon.
+* 10.3.2. **Pruning Action:**
+  - 10.3.2.1. Calculate the pruning threshold boundary time as `now - 24 hours` in ISO-8601 format.
+  - 10.3.2.2. Query Cloud Firestore to retrieve all documents in the `posts` collection where `matchedAt` is strictly less than this boundary time:
+    `db.collection('posts').where('matchedAt', '<', boundaryTime)`
+  - 10.3.2.3. For each document returned, execute a delete call to permanently remove the document from Firestore.
+  - 10.3.2.4. **Retention Boundary:** Do NOT delete or modify documents in the `feedback_logs` collection. Those remain intact for historical training/analysis.
+
 ---
 
 ## 11. Stage 3: Simple Feedback Accumulation

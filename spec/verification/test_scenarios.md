@@ -342,6 +342,19 @@ These scenarios verify client-side CSS layouts, state transitions, PWA metadata,
 
 ---
 
+### 7.13 Firestore 24-Hour Document Pruning Verification
+* 7.13.1. **Test Setup:** Populate Cloud Firestore with 3 mock post documents:
+  - Post A: `matchedAt` set to 12 hours ago (within 24-hour window).
+  - Post B: `matchedAt` set to 25 hours ago (outside 24-hour window).
+  - Post C: `matchedAt` set to 30 hours ago (outside 24-hour window).
+* 7.13.2. **Test Action:** Trigger the background pruning task in the daemon.
+* 7.13.3. **Assertions:**
+  - 7.13.3.1. Post A remains in Firestore.
+  - 7.13.3.2. Post B and Post C are successfully deleted from Cloud Firestore.
+  - 7.13.3.3. Historical records in `feedback_logs` are NOT deleted or modified.
+
+---
+
 ## 8. Implementing Agent Verification & Testing Guidelines
 
 These rules apply strictly to any AI agent or developer implementing modifications to the frontend code.

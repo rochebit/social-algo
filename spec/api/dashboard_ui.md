@@ -36,14 +36,13 @@ To interact with the Bluesky API for Liking and Following, the app maintains a c
 To prevent posts from shifting or moving while reading, the feed does **not** bind a real-time listener directly to the view. Instead, it uses a manual-refresh pagination model.
 
 ### 3.1 Consistent Score-Sorted Feed Query
-* 3.1.1. **Initialize State:** When `/feed` mounts, initialize `timeframeFilter = "all"` (default) and record `pageLoadTime = new Date().toISOString()`.
+* 3.1.1. **Initialize State:** When `/feed` mounts, record `pageLoadTime = new Date().toISOString()`.
 * 3.1.2. **Execute Static Fetch:** Query Firestore once (`.get()`):
   - 3.1.2.1. **Collection:** `posts`
   - 3.1.2.2. **Filters:**
     - `isDeleted == false`
     - `feedback == null`
     - `matchedAt <= pageLoadTime`
-    - If `timeframeFilter != "all"`, add filter: `matchedAt >= timeframeFilterBoundaryTime` (calculated using `currentTime - SelectedDuration`, e.g., 24 hours, 3 days, or 7 days ago).
   - 3.1.2.3. **Sorting:**
     - First Sort: **`relevanceScore` (Descending)** (shows best posts first)
     - Second Sort: **`matchedAt` (Descending)** (fallback chronological order)
@@ -55,20 +54,15 @@ To prevent posts from shifting or moving while reading, the feed does **not** bi
   - `isDeleted == false`
   - `feedback == null`
   - `matchedAt > pageLoadTime`
-  - If `timeframeFilter != "all"`, add filter: `matchedAt >= timeframeFilterBoundaryTime`.
 * 3.2.2. **Banner Toggle:** If the count returns `N > 0`, display a floating, sticky banner at the top center of the viewport reading: `[ 🗘 Load {N} new posts ]`.
 * 3.2.3. **Click Action:** When clicked, update `pageLoadTime` to the current time, re-run the static query (Section 3.1.2), replace the feed state, and scroll back to the top of the viewport.
 
 ### 3.3 Real-Time Review & Score Bucket Counters
-* 3.3.1. **Query & Real-Time Listener:** To track the remaining review workload, the UI registers a single real-time snapshot listener on the unreviewed posts collection matching the active timeframe filter:
+* 3.3.1. **Query & Real-Time Listener:** To track the remaining review workload, the UI registers a single real-time snapshot listener on the unreviewed posts collection:
   ```javascript
   let query = db.collection('posts')
     .where('isDeleted', '==', false)
     .where('feedback', '==', null);
-  
-  if (timeframeFilter !== 'all') {
-    query = query.where('matchedAt', '>=', timeframeFilterBoundaryTime);
-  }
   
   query.onSnapshot(snapshot => {
     // 1. Calculate total unreviewed count
@@ -99,7 +93,6 @@ To prevent posts from shifting or moving while reading, the feed does **not** bi
 * 3.3.4. **Dynamic Updates:**
   - 3.3.4.1. Decrement the matching score bucket and total counts immediately when the user rates or skips a post.
   - 3.3.4.2. Increment the matching score bucket and total counts immediately when the ingestion daemon syncs a new post match.
-  - 3.3.4.3. Re-initialize the listener query dynamically whenever `timeframeFilter` is changed.
 
 ### 3.4 PWA Update & Logo Refresh Action
 * 3.4.1. **Logo Placement:** Render the application logo inside the collapsible side drawer header.
@@ -144,17 +137,14 @@ The top navigation area is minimized to a compact **Header** and an interactive 
 * 4.3.1. **The Compact Header (`#app-header`):**
   - 4.3.1.1. **CSS Layout:** Set header height to `48px`. Flex container: `display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background-color: #0f172a; border-bottom: 1px solid rgba(255,255,255,0.08); z-index: 999;`.
   - 4.3.1.2. **Menu Toggle Button (`#menu-toggle-btn`):** Render a hamburger menu icon (width/height `24px`) on the left to toggle the collapsible side drawer open.
-  - 4.3.1.3. **Timeframe Selector (`#timeframe-select`):** Render a styled dropdown selector `<select>` next to the menu toggle button.
-    - 4.3.1.3.1. **Options:** "All" (value `all`, default), "24h" (value `24h`), "3d" (value `3d`), "7d" (value `7d`).
-    - 4.3.1.3.2. **Interaction:** Triggers query re-evaluation, timeframe boundary updates, and counter snapshot re-binding (Section 3.1 & 3.3).
-  - 4.3.1.4. **Score Bucket Badges Container (`#header-score-badges`):** Rendered in the center of the header. Renders five styled indicators representing counts of unreviewed posts matching the active timeframe filter (Section 3.3.3).
+  - 4.3.1.4. **Score Bucket Badges Container (`#header-score-badges`):** Rendered in the center of the header. Renders five styled indicators representing counts of unreviewed posts (Section 3.3.3).
   - 4.3.1.5. **Backend Status Indicator Dot (`#backend-status-dot`):** Render a small circular status dot (width/height `12px`, rounded corners `50%`) representing the daemon state retrieved from Firestore `/stats/backend`:
     - 4.3.1.5.1. **Green (Online):** If the current time is within 7 minutes of `lastActive` AND `geminiFailureCount24h == 0`.
     - 4.3.1.5.2. **Amber (Issues Detected):** If the current time is within 7 minutes of `lastActive` BUT `geminiFailureCount24h > 0` or `lastError != null`.
     - 4.3.1.5.3. **Red (Offline):** If the current time is more than 7 minutes past `lastActive`.
     - 4.3.1.5.4. **Tooltip Info:** Provide a native browser tooltip (`title` attribute) listing quick metrics (e.g. `Status: Online | Queue: {queueSize} | Failures: {geminiFailureCount24h}`).
     - 4.3.1.5.5. **Click Interaction:** Clicking the dot must open the **Backend Status Details Modal** (`#backend-status-modal`) described in Section 4.4.
-  - 4.3.1.6. **Header Elements & Cleanliness:** Aside from the menu toggle, timeframe selector, score badges container, and backend status dot, no titles, logo icons, or username labels may be visible in the main header space.
+  - 4.3.1.6. **Header Elements & Cleanliness:** Aside from the menu toggle, score badges container, and backend status dot, no titles, logo icons, or username labels may be visible in the main header space.
 * 4.3.2. **The Collapsible Side Drawer (`#side-drawer`):**
   - 4.3.2.1. **CSS Layout:** Positioned off-screen by default: `position: fixed; top: 0; left: -280px; width: 280px; height: 100dvh; background: rgba(30, 41, 59, 0.95); backdrop-filter: blur(20px); border-right: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 8px 0 32px rgba(0, 0, 0, 0.5); z-index: 1050; display: flex; flex-direction: column; transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); box-sizing: border-box;`.
   - 4.3.2.2. **Overlay/Backdrop (`#drawer-backdrop`):** Render a semi-transparent screen overlay (`background-color: rgba(0, 0, 0, 0.4); backdrop-filter: blur(4px); z-index: 1040;`) when the drawer is open. Clicking the backdrop closes the drawer.

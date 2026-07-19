@@ -65,6 +65,16 @@ To deploy, the client repository must contain a `firebase.json` configuration fi
       "fields": [
         { "fieldPath": "isDeleted", "order": "ASCENDING" },
         { "fieldPath": "feedback", "order": "ASCENDING" },
+        { "fieldPath": "relevanceScore", "order": "DESCENDING" },
+        { "fieldPath": "matchedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "posts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "isDeleted", "order": "ASCENDING" },
+        { "fieldPath": "feedback", "order": "ASCENDING" },
         { "fieldPath": "matchedAt", "order": "DESCENDING" }
       ]
     },
