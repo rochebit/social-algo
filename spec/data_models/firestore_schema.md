@@ -222,8 +222,8 @@ service cloud.firestore {
         && request.auth.token.email == "OWNER_EMAIL_PLACEHOLDER";
     }
 
-    // Rule for matching posts
-    match /posts/{postId} {
+    // Rule for matching threads
+    match /threads/{threadId} {
       allow read, write: if isOwner();
     }
 
@@ -250,7 +250,7 @@ service cloud.firestore {
   - 3.2.1. Assert authentication is not null: `request.auth != null`.
   - 3.2.2. Assert user email is verified: `request.auth.token.email_verified == true`.
   - 3.2.3. Assert user email matches the whitelisted owner email: `request.auth.token.email == "OWNER_EMAIL_PLACEHOLDER"`.
-* 3.3. **`posts` Collection Path Access:** Allow read/write access on `/posts/{postId}` if and only if `isOwner()` is true.
+* 3.3. **`threads` Collection Path Access:** Allow read/write access on `/threads/{threadId}` if and only if `isOwner()` is true.
 * 3.4. **`feedback_logs` Collection Path Access:** Allow read/write access on `/feedback_logs/{feedbackId}` if and only if `isOwner()` is true.
 * 3.5. **`stats` Collection Path Access:** Allow read/write access on `/stats/{docId}` if and only if `isOwner()` is true.
 * 3.6. **`deployments` Collection Path Access:** Allow read/write access on `/deployments/{deploymentId}` if and only if `isOwner()` is true.
